@@ -1,0 +1,114 @@
+﻿{
+  "movies": [
+    {
+      "id": "1",
+      "title": "The Last Mission",
+      "category": "Action",
+      "year": "2026",
+      "description": "Une mission dangereuse qui va pousser notre héros au-delà de ses limites.",
+      "poster": "1.jpg",
+      "stream_url": "https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/720/Big_Buck_Bunny_720_10s_1MB.mp4",
+      "container_extension": "mp4",
+      "duration": "01:58:00",
+      "rating": "8.2",
+      "actors": [
+        "Acteur principal",
+        "Acteur secondaire"
+      ],
+      "director": "Réalisateur",
+      "country": "International"
+    },
+    {
+      "id": "2",
+      "title": "Beyond the Stars",
+      "category": "Science-Fiction",
+      "year": "2025",
+      "description": "Une aventure spectaculaire aux confins de l’espace.",
+      "poster": "2.jpg",
+      "stream_url": "",
+      "container_extension": "mp4",
+      "duration": "02:10:00",
+      "rating": "8.5",
+      "actors": [
+        "Acteur principal",
+        "Actrice principale"
+      ],
+      "director": "Réalisateur",
+      "country": "International"
+    },
+    {
+      "id": "3",
+      "title": "La Grande Aventure",
+      "category": "Comédie",
+      "year": "2026",
+      "description": "Une aventure pleine de situations inattendues et de moments hilarants.",
+      "poster": "3.png",
+      "stream_url": "",
+      "container_extension": "mp4",
+      "duration": "01:45:00",
+      "rating": "7.8",
+      "actors": [
+        "Acteur principal",
+        "Actrice secondaire"
+      ],
+      "director": "Réalisateur",
+      "country": "France"
+    },
+    {
+      "id": "4",
+      "title": "The Dark City",
+      "category": "Drame",
+      "year": "2025",
+      "description": "Dans une ville plongée dans l’obscurité, chacun cache ses propres secrets.",
+      "poster": "4.png",
+      "stream_url": "",
+      "container_extension": "mkv",
+      "duration": "02:02:00",
+      "rating": "8.0",
+      "actors": [
+        "Acteur principal",
+        "Acteur secondaire"
+      ],
+      "director": "Réalisateur",
+      "country": "International"
+    },
+    {
+      "id": "5",
+      "title": "Final Destination",
+      "category": "Action",
+      "year": "2026",
+      "description": "Une course contre la montre où chaque seconde compte.",
+      "poster": "5.png",
+      "stream_url": "",
+      "container_extension": "mp4",
+      "duration": "01:52:00",
+      "rating": "8.1",
+      "actors": [
+        "Acteur principal",
+        "Actrice principale"
+      ],
+      "director": "Réalisateur",
+      "country": "International"
+    },
+    {
+      "id": "6",
+      "title": "Lost Planet",
+      "category": "Science-Fiction",
+      "year": "2025",
+      "description": "Un équipage perdu sur une planète inconnue tente de retrouver le chemin de la maison.",
+      "poster": "6.png",
+      "stream_url": "",
+      "container_extension": "mp4",
+      "duration": "02:15:00",
+      "rating": "8.7",
+      "actors": [
+        "Acteur principal",
+        "Acteur secondaire"
+      ],
+      "director": "Réalisateur",
+      "country": "International"
+    }
+
+
+  ]
+}
