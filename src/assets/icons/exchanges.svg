@@ -1,0 +1,23 @@
+﻿<svg
+  width="24"
+  height="24"
+  viewBox="0 0 24 24"
+  fill="none"
+  xmlns="http://www.w3.org/2000/svg"
+>
+  <!-- Bulle principale -->
+  <path
+    d="M4 5.5C4 4.67 4.67 4 5.5 4H15.5C16.33 4 17 4.67 17 5.5V12.5C17 13.33 16.33 14 15.5 14H9L5 17V14.5C4.43 14.25 4 13.68 4 13V5.5Z"
+    stroke="currentColor"
+    stroke-width="1.8"
+    stroke-linejoin="round"
+  />
+
+  <!-- Deuxième bulle -->
+  <path
+    d="M10 17.5C10 18.33 10.67 19 11.5 19H16L19 21V18.5C19.6 18.25 20 17.67 20 17V11.5C20 10.67 19.33 10 18.5 10H18"
+    stroke="currentColor"
+    stroke-width="1.8"
+    stroke-linejoin="round"
+  />
+</svg>

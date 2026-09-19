@@ -144,34 +144,73 @@ export class XtreamClient {
   }
 
   private async request(
-    action?: string,
-    extraParams: Record<string, string> = {}
-  ) {
-    const params = new URLSearchParams({
-      username: this.username,
-      password: this.password,
-      ...extraParams,
-    });
+      action?: string,
+      extraParams: Record<string, string> = {}
+    ) {
+      const params = new URLSearchParams({
+        username: this.username,
+        password: this.password,
+        ...extraParams,
+      });
 
-    if (action) {
-      params.append('action', action);
-    }
+      if (action) {
+        params.append('action', action);
+      }
 
-    const url =
-      this.server +
-      '/player_api.php?' +
-      params.toString();
+      const url =
+        this.server +
+        '/player_api.php?' +
+        params.toString();
 
-    const response = await fetch(url);
+      const response =
+        await fetch(url);
 
-    if (!response.ok) {
-      throw new Error(
-        'Erreur HTTP ' + response.status
+      const responseText =
+        await response.text();
+
+      console.log(
+        'XTREAM REQUÊTE :',
+        action ?? 'authenticate',
+        'HTTP :',
+        response.status,
+        'TAILLE :',
+        responseText.length
       );
-    }
 
-    return response.json();
-  }
+      if (!response.ok) {
+        throw new Error(
+          'Erreur HTTP ' +
+            response.status +
+            ' — action : ' +
+            (action ?? 'authenticate')
+        );
+      }
+
+      if (!responseText.trim()) {
+        throw new Error(
+          'Réponse Xtream vide — action : ' +
+            (action ?? 'authenticate')
+        );
+      }
+
+      try {
+        return JSON.parse(responseText);
+      } catch (error) {
+        console.error(
+          'RÉPONSE XTREAM NON JSON :',
+          action ?? 'authenticate',
+          'TAILLE :',
+          responseText.length,
+          'DÉBUT :',
+          responseText.slice(0, 200)
+        );
+
+        throw new Error(
+          'Réponse Xtream invalide — action : ' +
+            (action ?? 'authenticate')
+        );
+      }
+    }
 
   /*
   ============================================================

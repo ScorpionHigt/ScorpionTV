@@ -1,7 +1,4 @@
-﻿import { XtreamClient } from '../../api/xtreamClient';
-import { xtreamConfig } from '../../api/config';
-
-import React, {
+﻿import React, {
   useEffect,
   useMemo,
   useState,
@@ -23,6 +20,9 @@ import {
   useLocalSearchParams,
 } from 'expo-router';
 
+import { XtreamClient } from '../../api/xtreamClient';
+import { getUserAccess } from '../../api/accessApi';
+
 import {
   getSeriesInfo,
   type SeriesEpisode,
@@ -38,17 +38,9 @@ type Season = {
 };
 
 export default function SeriesDetailsScreen() {
-  
-const xtreamClient =
-    useMemo(
-      () => new XtreamClient(xtreamConfig),
-      []
-    );
-
-const { id } = useLocalSearchParams<{
+  const { id } = useLocalSearchParams<{
     id: string;
   }>();
-
 
   const [loading, setLoading] =
     useState(true);
@@ -68,6 +60,9 @@ const { id } = useLocalSearchParams<{
   const [episodes, setEpisodes] =
     useState<SeriesEpisode[]>([]);
 
+  const [xtreamClient, setXtreamClient] =
+    useState<XtreamClient | null>(null);
+
   useEffect(() => {
     let mounted = true;
 
@@ -82,23 +77,80 @@ const { id } = useLocalSearchParams<{
           );
         }
 
-            const result =
-            await getSeriesInfo(Number(id));
+        /*
+         * Récupération de l'accès utilisateur.
+         *
+         * Le serveur Xtream n'est plus stocké
+         * directement dans l'application.
+         */
+        const access =
+          await getUserAccess();
+
+        if (!access.subscription) {
+          throw new Error(
+            'Aucun abonnement actif.'
+          );
+        }
+
+        if (
+          !access.limits ||
+          access.limits.series <= 0
+        ) {
+          throw new Error(
+            'Votre abonnement ne permet pas d’accéder aux séries.'
+          );
+        }
+
+        if (!access.xtream) {
+          throw new Error(
+            'Configuration Xtream indisponible.'
+          );
+        }
+
+        const client =
+          new XtreamClient({
+            server:
+              access.xtream.server_url,
+            username:
+              access.xtream.username,
+            password:
+              access.xtream.password,
+          });
 
         if (!mounted) {
           return;
         }
 
-        setSeriesInfo(result.info ?? null);
+        setXtreamClient(client);
+
+        /*
+         * Les informations de la série viennent
+         * du cache SQLite / Xtream via le repository.
+         */
+        const result =
+          await getSeriesInfo(Number(id));
+
+        if (!mounted) {
+          return;
+        }
+
+        setSeriesInfo(
+          result.info ?? null
+        );
 
         const loadedSeasons =
           result.seasons ?? [];
 
-        setSeasons(loadedSeasons);
+        setSeasons(
+          loadedSeasons
+        );
 
-        if (loadedSeasons.length > 0) {
+        if (
+          loadedSeasons.length > 0
+        ) {
           setSelectedSeason(
-            loadedSeasons[0].season_number
+            loadedSeasons[0]
+              .season_number
           );
         }
 
@@ -118,48 +170,65 @@ const { id } = useLocalSearchParams<{
             allEpisodes[firstSeason] ?? [];
 
           setEpisodes(
-            firstEpisodes.map(episode => ({
-              episode_id: Number(
-                episode.id
-              ),
-              series_id: Number(id),
-              season:
-                episode.season ??
-                Number(firstSeason),
-              episode:
-                episode.episode_num,
-              title: episode.title,
-              container_extension:
-                episode.container_extension,
-              plot:
-                episode.info?.plot ??
-                null,
-              rating:
-                episode.info?.rating ??
-                null,
-              rating_5based:
-                episode.info
-                  ?.rating_5based ??
-                null,
-              duration:
-                episode.info?.duration ??
-                null,
-              duration_seconds:
-                episode.info
-                  ?.duration_secs ??
-                null,
-              direct_source:
-                episode.direct_source ??
-                null,
-              added:
-                episode.added ??
-                null,
-              custom_sid:
-                episode.custom_sid ??
-                null,
-              episode_num:
-                episode.episode_num,
-            }))
+            firstEpisodes.map(
+              (episode) => ({
+                episode_id:
+                  Number(episode.id),
+
+                series_id:
+                  Number(id),
+
+                season:
+                  episode.season ??
+                  Number(firstSeason),
+
+                episode:
+                  episode.episode_num,
+
+                title:
+                  episode.title,
+
+                container_extension:
+                  episode.container_extension,
+
+                plot:
+                  episode.info?.plot ??
+                  null,
+
+                rating:
+                  episode.info?.rating ??
+                  null,
+
+                rating_5based:
+                  episode.info
+                    ?.rating_5based ??
+                  null,
+
+                duration:
+                  episode.info?.duration ??
+                  null,
+
+                duration_seconds:
+                  episode.info
+                    ?.duration_secs ??
+                  null,
+
+                direct_source:
+                  episode.direct_source ??
+                  null,
+
+                added:
+                  episode.added ??
+                  null,
+
+                custom_sid:
+                  episode.custom_sid ??
+                  null,
+
+                episode_num:
+                  episode.episode_num,
+              })
+            )
           );
         }
       } catch (err) {
@@ -188,7 +257,10 @@ const { id } = useLocalSearchParams<{
 
   const selectedSeasonEpisodes =
     useMemo(() => {
-      if (!selectedSeason || !seriesInfo) {
+      if (
+        !selectedSeason ||
+        !seriesInfo
+      ) {
         return episodes;
       }
 
@@ -202,56 +274,74 @@ const { id } = useLocalSearchParams<{
   const handleSeason = (
     seasonNumber: number
   ) => {
-    setSelectedSeason(seasonNumber);
+    setSelectedSeason(
+      seasonNumber
+    );
 
     const allEpisodes =
       seriesInfo?.episodes ?? {};
 
     const seasonEpisodes =
-      allEpisodes[String(seasonNumber)] ??
-      [];
+      allEpisodes[
+        String(seasonNumber)
+      ] ?? [];
 
     setEpisodes(
       seasonEpisodes.map(
         (episode: any) => ({
-          episode_id: Number(
-            episode.id
-          ),
-          series_id: Number(id),
+          episode_id:
+            Number(episode.id),
+
+          series_id:
+            Number(id),
+
           season:
             episode.season ??
             seasonNumber,
+
           episode:
             episode.episode_num,
-          title: episode.title,
+
+          title:
+            episode.title,
+
           container_extension:
             episode.container_extension,
+
           plot:
             episode.info?.plot ??
             null,
+
           rating:
             episode.info?.rating ??
             null,
+
           rating_5based:
             episode.info
               ?.rating_5based ??
             null,
+
           duration:
             episode.info?.duration ??
             null,
+
           duration_seconds:
             episode.info
               ?.duration_secs ??
             null,
+
           direct_source:
             episode.direct_source ??
             null,
+
           added:
             episode.added ??
             null,
+
           custom_sid:
             episode.custom_sid ??
             null,
+
           episode_num:
             episode.episode_num,
         })
@@ -261,10 +351,17 @@ const { id } = useLocalSearchParams<{
 
   if (loading) {
     return (
-      <SafeAreaView style={styles.container}>
+      <SafeAreaView
+        style={styles.container}
+      >
         <View style={styles.center}>
-          <ActivityIndicator size="large" />
-          <Text style={styles.loadingText}>
+          <ActivityIndicator
+            size="large"
+          />
+
+          <Text
+            style={styles.loadingText}
+          >
             Chargement de la série...
           </Text>
         </View>
@@ -274,7 +371,9 @@ const { id } = useLocalSearchParams<{
 
   if (error) {
     return (
-      <SafeAreaView style={styles.container}>
+      <SafeAreaView
+        style={styles.container}
+      >
         <View style={styles.center}>
           <Text style={styles.error}>
             {error}
@@ -282,9 +381,15 @@ const { id } = useLocalSearchParams<{
 
           <Pressable
             style={styles.backButton}
-            onPress={() => router.back()}
+            onPress={() =>
+              router.back()
+            }
           >
-            <Text style={styles.backButtonText}>
+            <Text
+              style={
+                styles.backButtonText
+              }
+            >
               Retour
             </Text>
           </Pressable>
@@ -295,7 +400,9 @@ const { id } = useLocalSearchParams<{
 
   if (!seriesInfo) {
     return (
-      <SafeAreaView style={styles.container}>
+      <SafeAreaView
+        style={styles.container}
+      >
         <View style={styles.center}>
           <Text style={styles.error}>
             Série introuvable.
@@ -303,9 +410,15 @@ const { id } = useLocalSearchParams<{
 
           <Pressable
             style={styles.backButton}
-            onPress={() => router.back()}
+            onPress={() =>
+              router.back()
+            }
           >
-            <Text style={styles.backButtonText}>
+            <Text
+              style={
+                styles.backButtonText
+              }
+            >
               Retour
             </Text>
           </Pressable>
@@ -318,7 +431,9 @@ const { id } = useLocalSearchParams<{
     seriesInfo.cover ?? null;
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView
+      style={styles.container}
+    >
       <ScrollView
         contentContainerStyle={
           styles.content
@@ -326,7 +441,9 @@ const { id } = useLocalSearchParams<{
       >
         <View style={styles.topBar}>
           <Pressable
-            onPress={() => router.back()}
+            onPress={() =>
+              router.back()
+            }
           >
             <Text style={styles.back}>
               ← Retour
@@ -337,7 +454,9 @@ const { id } = useLocalSearchParams<{
         <View style={styles.hero}>
           {poster ? (
             <Image
-              source={{ uri: poster }}
+              source={{
+                uri: poster,
+              }}
               style={styles.poster}
             />
           ) : (
@@ -357,25 +476,33 @@ const { id } = useLocalSearchParams<{
             </View>
           )}
 
-          <View style={styles.heroInfo}>
+          <View
+            style={styles.heroInfo}
+          >
             <Text style={styles.title}>
               {seriesInfo.name}
             </Text>
 
             {seriesInfo.rating ? (
-              <Text style={styles.rating}>
+              <Text
+                style={styles.rating}
+              >
                 ★ {seriesInfo.rating}
               </Text>
             ) : null}
 
             {seriesInfo.genre ? (
-              <Text style={styles.genre}>
+              <Text
+                style={styles.genre}
+              >
                 {seriesInfo.genre}
               </Text>
             ) : null}
 
             {seriesInfo.releaseDate ? (
-              <Text style={styles.meta}>
+              <Text
+                style={styles.meta}
+              >
                 {seriesInfo.releaseDate}
               </Text>
             ) : null}
@@ -384,7 +511,11 @@ const { id } = useLocalSearchParams<{
 
         {seriesInfo.plot ? (
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>
+            <Text
+              style={
+                styles.sectionTitle
+              }
+            >
               Synopsis
             </Text>
 
@@ -396,7 +527,11 @@ const { id } = useLocalSearchParams<{
 
         {seriesInfo.cast ? (
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>
+            <Text
+              style={
+                styles.sectionTitle
+              }
+            >
               Acteurs
             </Text>
 
@@ -407,7 +542,9 @@ const { id } = useLocalSearchParams<{
         ) : null}
 
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>
+          <Text
+            style={styles.sectionTitle}
+          >
             Saisons
           </Text>
 
@@ -420,58 +557,66 @@ const { id } = useLocalSearchParams<{
               styles.seasons
             }
           >
-            {seasons.map(season => (
-              <Pressable
-                key={season.season_number}
-                style={[
-                  styles.season,
-                  selectedSeason ===
-                    season.season_number &&
-                    styles.seasonActive,
-                ]}
-                onPress={() =>
-                  handleSeason(
+            {seasons.map(
+              (season) => (
+                <Pressable
+                  key={
                     season.season_number
-                  )
-                }
-              >
-                <Text
+                  }
                   style={[
-                    styles.seasonText,
+                    styles.season,
                     selectedSeason ===
                       season.season_number &&
-                      styles.seasonTextActive,
+                      styles.seasonActive,
                   ]}
+                  onPress={() =>
+                    handleSeason(
+                      season.season_number
+                    )
+                  }
                 >
-                  {season.name ??
-                    `Saison ${season.season_number}`}
-                </Text>
-
-                {season.episode_count !==
-                undefined ? (
                   <Text
                     style={[
-                      styles.episodeCount,
+                      styles.seasonText,
                       selectedSeason ===
                         season.season_number &&
-                        styles.episodeCountActive,
+                        styles.seasonTextActive,
                     ]}
                   >
-                    {season.episode_count}{' '}
-                    épisode
-                    {season.episode_count >
-                    1
-                      ? 's'
-                      : ''}
+                    {season.name ??
+                      `Saison ${season.season_number}`}
                   </Text>
-                ) : null}
-              </Pressable>
-            ))}
+
+                  {season.episode_count !==
+                  undefined ? (
+                    <Text
+                      style={[
+                        styles.episodeCount,
+                        selectedSeason ===
+                          season.season_number &&
+                          styles.episodeCountActive,
+                      ]}
+                    >
+                      {
+                        season.episode_count
+                      }{' '}
+                      épisode
+                      {season.episode_count >
+                      1
+                        ? 's'
+                        : ''}
+                    </Text>
+                  ) : null}
+                </Pressable>
+              )
+            )}
           </ScrollView>
         </View>
 
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>
+          <Text
+            style={styles.sectionTitle}
+          >
             Épisodes
           </Text>
 
@@ -486,33 +631,50 @@ const { id } = useLocalSearchParams<{
                 <Pressable
                   key={`${episode.episode_id}-${index}`}
                   style={styles.episode}
-                    onPress={() => {
-                      if (!episode.episode_id) {
-                        return;
-                      }
+                  onPress={() => {
+                    if (
+                      !episode.episode_id
+                    ) {
+                      return;
+                    }
 
-                      const extension =
-                        episode.container_extension ||
-                        'mp4';
+                    const extension =
+                      episode.container_extension ||
+                      'mp4';
 
-                      const episodeUrl =
-                        episode.direct_source ||
+                    let episodeUrl =
+                      episode.direct_source ||
+                      '';
+
+                    if (
+                      !episodeUrl &&
+                      xtreamClient
+                    ) {
+                      episodeUrl =
                         xtreamClient.getSeriesEpisodeUrl(
                           episode.episode_id,
                           extension
                         );
+                    }
 
-                      router.push({
-                        pathname: '/player',
-                        params: {
-                          url: episodeUrl,
-                          title: `${seriesInfo.name} - ${episode.title}`,
-                        },
-                      });
-                    }}
+                    if (!episodeUrl) {
+                      return;
+                    }
+
+                    router.push({
+                      pathname:
+                        '/player',
+                      params: {
+                        url: episodeUrl,
+                        title: `${seriesInfo.name} - ${episode.title}`,
+                      },
+                    });
+                  }}
                 >
                   <View
-                    style={styles.episodeNumber}
+                    style={
+                      styles.episodeNumber
+                    }
                   >
                     <Text
                       style={
@@ -525,7 +687,9 @@ const { id } = useLocalSearchParams<{
                   </View>
 
                   <View
-                    style={styles.episodeInfo}
+                    style={
+                      styles.episodeInfo
+                    }
                   >
                     <Text
                       style={
@@ -538,7 +702,9 @@ const { id } = useLocalSearchParams<{
 
                     {episode.duration ? (
                       <Text
-                        style={styles.duration}
+                        style={
+                          styles.duration
+                        }
                       >
                         {episode.duration}
                       </Text>
@@ -546,7 +712,9 @@ const { id } = useLocalSearchParams<{
 
                     {episode.plot ? (
                       <Text
-                        style={styles.episodePlot}
+                        style={
+                          styles.episodePlot
+                        }
                         numberOfLines={2}
                       >
                         {episode.plot}
@@ -555,7 +723,9 @@ const { id } = useLocalSearchParams<{
                   </View>
 
                   <Text
-                    style={styles.playIcon}
+                    style={
+                      styles.playIcon
+                    }
                   >
                     ▶
                   </Text>

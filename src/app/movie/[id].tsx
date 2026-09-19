@@ -1,627 +1,1037 @@
-﻿import React, { useEffect, useState } from 'react';
+﻿import React, {
+  useEffect,
+  useState,
+} from 'react';
+
 import {
-ActivityIndicator,
-Image,
-Pressable,
-ScrollView,
-StyleSheet,
-Text,
-ToastAndroid,
-View,
+  ActivityIndicator,
+  Image,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  ToastAndroid,
+  View,
 } from 'react-native';
+
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { router, useLocalSearchParams } from 'expo-router';
+
+import {
+  router,
+  useLocalSearchParams,
+} from 'expo-router';
+
 import * as FileSystem from 'expo-file-system/legacy';
-import { XtreamClient } from '../../api/xtreamClient';
-import { xtreamConfig } from '../../api/config';
+
+import {
+  XtreamClient,
+} from '../../api/xtreamClient';
+
+import {
+  getUserAccess,
+} from '../../api/accessApi';
 
 type MovieInfo = {
-info?: {
-name?: string;
-o_name?: string;
-cover_big?: string;
-movie_image?: string;
-releasedate?: string;
-episode_run_time?: string;
-youtube_trailer?: string;
-director?: string;
-actors?: string;
-cast?: string;
-description?: string;
-plot?: string;
-age?: string;
-country?: string;
-genre?: string;
-duration_secs?: number;
-duration?: string;
-rating?: string;
-};
+  info?: {
+    name?: string;
+    o_name?: string;
+    cover_big?: string;
+    movie_image?: string;
+    releasedate?: string;
+    episode_run_time?: string;
+    youtube_trailer?: string;
+    director?: string;
+    actors?: string;
+    cast?: string;
+    description?: string;
+    plot?: string;
+    age?: string;
+    country?: string;
+    genre?: string;
+    duration_secs?: number;
+    duration?: string;
+    rating?: string;
+  };
 
-movie_data?: {
-stream_id?: number;
-name?: string;
-category_id?: string;
-container_extension?: string;
-};
+  movie_data?: {
+    stream_id?: number;
+    name?: string;
+    category_id?: string;
+    container_extension?: string;
+  };
 };
 
 export default function MovieDetailsScreen() {
-const { id } = useLocalSearchParams<{ id: string }>();
+  const { id } =
+    useLocalSearchParams<{ id: string }>();
 
-const [movie, setMovie] = useState<MovieInfo | null>(null);
-const [loading, setLoading] = useState(true);
-const [downloading, setDownloading] = useState(false);
-const [downloadProgress, setDownloadProgress] = useState(0);
-const [error, setError] = useState<string | null>(null);
+  const [movie, setMovie] =
+    useState<MovieInfo | null>(null);
 
-useEffect(() => {
-loadMovie();
-}, [id]);
+  const [loading, setLoading] =
+    useState(true);
 
-async function loadMovie() {
-try {
-setLoading(true);
-setError(null);
+  const [downloading, setDownloading] =
+    useState(false);
 
-  if (!id) {
-    throw new Error('ID du film introuvable.');
+  const [downloadProgress, setDownloadProgress] =
+    useState(0);
+
+  const [error, setError] =
+    useState<string | null>(null);
+
+  useEffect(() => {
+    loadMovie();
+  }, [id]);
+
+  async function loadMovie() {
+    try {
+      setLoading(true);
+      setError(null);
+
+      if (!id) {
+        throw new Error(
+          'ID du film introuvable.'
+        );
+      }
+
+      console.log(
+        'CHARGEMENT DÉTAILS FILM :',
+        id
+      );
+
+      /*
+       * Récupération des droits utilisateur
+       * et de la configuration Xtream depuis
+       * le backend.
+       */
+      const access =
+        await getUserAccess();
+
+      if (!access.subscription) {
+        throw new Error(
+          'Aucun abonnement actif.'
+        );
+      }
+
+      if (!access.limits) {
+        throw new Error(
+          'Les limites de votre abonnement sont introuvables.'
+        );
+      }
+
+      if (access.limits.movies <= 0) {
+        throw new Error(
+          'Votre abonnement ne permet pas l’accès aux films.'
+        );
+      }
+
+      if (!access.xtream) {
+        throw new Error(
+          'Aucun serveur Xtream disponible.'
+        );
+      }
+
+      console.log(
+        'ABONNEMENT FILMS :',
+        access.subscription.name
+      );
+
+      console.log(
+        'LIMITE FILMS :',
+        access.limits.movies
+      );
+
+      /*
+       * Client Xtream construit uniquement
+       * à partir des données fournies par
+       * le backend.
+       */
+      const client =
+        new XtreamClient({
+          server:
+            access.xtream.server_url,
+          username:
+            access.xtream.username,
+          password:
+            access.xtream.password,
+        });
+
+      const result =
+        await client.getVodInfo(
+          String(id)
+        );
+
+      console.log(
+        'DÉTAILS FILM RÉCUPÉRÉS :',
+        result?.info?.name
+      );
+
+      setMovie(result);
+
+    } catch (err) {
+      console.error(
+        'ERREUR DÉTAILS FILM :',
+        err
+      );
+
+      if (
+        err instanceof Error
+      ) {
+        setError(err.message);
+      } else {
+        setError(
+          'Impossible de récupérer les informations du film.'
+        );
+      }
+
+    } finally {
+      setLoading(false);
+    }
   }
 
-  console.log('CHARGEMENT DÉTAILS FILM :', id);
+  /* --------------------------------------------------
+   * TÉLÉCHARGEMENT DU FILM
+   * -------------------------------------------------- */
 
-  const client = new XtreamClient(xtreamConfig);
+  async function downloadMovie() {
+    if (downloading) {
+      return;
+    }
 
-  const result = await client.getVodInfo(String(id));
+    try {
+      if (
+        !movie?.movie_data?.stream_id
+      ) {
+        ToastAndroid.show(
+          'ID du film introuvable.',
+          ToastAndroid.LONG
+        );
 
-  console.log(
-    'DÉTAILS FILM RÉCUPÉRÉS :',
-    result?.info?.name
-  );
+        return;
+      }
 
-  setMovie(result);
-} catch (err) {
-  console.error('ERREUR DÉTAILS FILM :', err);
+      /*
+       * Récupération de la configuration
+       * Xtream depuis le backend.
+       */
+      const access =
+        await getUserAccess();
 
-  setError(
-    'Impossible de récupérer les informations du film.'
-  );
-} finally {
-  setLoading(false);
-}
+      if (!access.subscription) {
+        ToastAndroid.show(
+          'Aucun abonnement actif.',
+          ToastAndroid.LONG
+        );
 
-}
+        return;
+      }
 
-/*---------------------*/
-async function downloadMovie() {
-if (downloading) {
-return;
-}
+      if (!access.limits) {
+        ToastAndroid.show(
+          'Les droits de votre abonnement sont introuvables.',
+          ToastAndroid.LONG
+        );
 
-try {
-if (!movie?.movie_data?.stream_id) {
-ToastAndroid.show(
-'ID du film introuvable.',
-ToastAndroid.LONG
-);
-return;
-}
+        return;
+      }
 
-const extension =
-movie.movie_data.container_extension || 'mp4';
+      if (access.limits.movies <= 0) {
+        ToastAndroid.show(
+          'Votre abonnement ne permet pas le téléchargement des films.',
+          ToastAndroid.LONG
+        );
 
-const client = new XtreamClient(xtreamConfig);
+        return;
+      }
 
-const url = client.getMovieUrl(
-String(movie.movie_data.stream_id),
-extension
-);
+      if (!access.xtream) {
+        ToastAndroid.show(
+          'Aucun serveur Xtream disponible.',
+          ToastAndroid.LONG
+        );
 
-const title =
-movie.info?.name ||
-movie.movie_data.name ||
-'film-' + movie.movie_data.stream_id;
+        return;
+      }
 
-const safeTitle = title
-.replace(/[<>:"/\\|?*\[\]]/g, '')
-.replace(/\s+/g, '_')
-.substring(0, 100);
+      const extension =
+        movie.movie_data
+          .container_extension ||
+        'mp4';
 
-const fileName = safeTitle + '.' + extension;
+      const client =
+        new XtreamClient({
+          server:
+            access.xtream.server_url,
+          username:
+            access.xtream.username,
+          password:
+            access.xtream.password,
+        });
 
-const fileUri =
-FileSystem.documentDirectory + fileName;
+      const url =
+        client.getMovieUrl(
+          String(
+            movie.movie_data.stream_id
+          ),
+          extension
+        );
 
-setDownloading(true);
-setDownloadProgress(0);
+      const title =
+        movie.info?.name ||
+        movie.movie_data.name ||
+        'film-' +
+          movie.movie_data.stream_id;
 
-ToastAndroid.show(
-'Téléchargement démarré...',
-ToastAndroid.SHORT
-);
+      const safeTitle =
+        title
+          .replace(
+            /[<>:"/\\|?*\[\]]/g,
+            ''
+          )
+          .replace(
+            /\s+/g,
+            '_'
+          )
+          .substring(
+            0,
+            100
+          );
 
-const downloadResumable =
-FileSystem.createDownloadResumable(
-url,
-fileUri,
-{},
-(progress) => {
-if (
-progress.totalBytesExpectedToWrite > 0
-) {
-const value =
-progress.totalBytesWritten /
-progress.totalBytesExpectedToWrite;
+      const fileName =
+        safeTitle +
+        '.' +
+        extension;
 
-setDownloadProgress(value);
-}
-}
-);
+      const fileUri =
+        FileSystem.documentDirectory +
+        fileName;
 
-const result =
-await downloadResumable.downloadAsync();
+      console.log(
+        'TÉLÉCHARGEMENT FILM :',
+        url
+      );
 
-if (!result?.uri) {
-throw new Error(
-'Le téléchargement est incomplet.'
-);
-}
+      setDownloading(true);
+      setDownloadProgress(0);
 
-setDownloadProgress(1);
+      ToastAndroid.show(
+        'Téléchargement démarré...',
+        ToastAndroid.SHORT
+      );
 
-ToastAndroid.show(
-'Film téléchargé avec succès !',
-ToastAndroid.LONG
-);
+      const downloadResumable =
+        FileSystem.createDownloadResumable(
+          url,
+          fileUri,
+          {},
+          (progress) => {
+            if (
+              progress.totalBytesExpectedToWrite >
+              0
+            ) {
+              const value =
+                progress.totalBytesWritten /
+                progress.totalBytesExpectedToWrite;
 
-} catch (err) {
-
-console.error(
-'ERREUR TÉLÉCHARGEMENT :',
-err
-);
-
-ToastAndroid.show(
-'Le téléchargement a échoué.',
-ToastAndroid.LONG
-);
-
-} finally {
-setDownloading(false);
-}
-}
-
-/*----------------------*/
-
-if (loading) {
-return (
-<SafeAreaView style={styles.container}>
-<View style={styles.center}>
-<ActivityIndicator size="large" color="#E50914" />
-
-      <Text style={styles.loadingText}>
-        Chargement du film...
-      </Text>
-    </View>
-  </SafeAreaView>
-);
-
-}
-
-if (error || !movie?.info) {
-return (
-<SafeAreaView style={styles.container}>
-<View style={styles.center}>
-<Text style={styles.errorIcon}>
-⚠️
-</Text>
-
-      <Text style={styles.errorText}>
-        {error ?? 'Film introuvable.'}
-      </Text>
-
-      <Pressable
-        style={styles.backButton}
-        onPress={() => router.back()}
-      >
-        <Text style={styles.backButtonText}>
-          Retour
-        </Text>
-      </Pressable>
-    </View>
-  </SafeAreaView>
-);
-
-}
-
-const info = movie.info;
-
-const title =
-info.name ||
-info.o_name ||
-'Film sans titre';
-
-const poster =
-info.cover_big ||
-info.movie_image ||
-null;
-
-const description =
-info.description ||
-info.plot ||
-'Aucune description disponible.';
-
-return (
-<SafeAreaView style={styles.container}>
-<ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content} >
-<Pressable
-style={styles.back}
-onPress={() => router.back()}
->
-<Text style={styles.backText}>
-‹ Retour
-</Text>
-</Pressable>
-
-    {poster ? (
-      <Image
-        source={{ uri: poster }}
-        style={styles.poster}
-        resizeMode="cover"
-      />
-    ) : (
-      <View style={styles.posterFallback}>
-        <Text style={styles.posterFallbackText}>
-          🎬
-        </Text>
-      </View>
-    )}
-
-    <View style={styles.infoContainer}>
-      <Text style={styles.title}>
-        {title}
-      </Text>
-
-      <View style={styles.metaRow}>
-        {info.rating ? (
-          <View style={styles.metaBadge}>
-            <Text style={styles.metaText}>
-              ⭐ {info.rating}
-            </Text>
-          </View>
-        ) : null}
-
-        {info.duration ? (
-          <View style={styles.metaBadge}>
-            <Text style={styles.metaText}>
-              ⏱️ {info.duration}
-            </Text>
-          </View>
-        ) : null}
-
-        {info.releasedate ? (
-          <View style={styles.metaBadge}>
-            <Text style={styles.metaText}>
-              📅 {info.releasedate}
-            </Text>
-          </View>
-        ) : null}
-      </View>
-
-      <View style={styles.actions}>
-        <Pressable
-          style={styles.playButton}
-          onPress={() => {
-            const client =
-              new XtreamClient(xtreamConfig);
-
-            const url =
-              client.getMovieUrl(
-                String(
-                  movie.movie_data?.stream_id
-                ),
-                movie.movie_data
-                  ?.container_extension || 'mp4'
+              setDownloadProgress(
+                value
               );
+            }
+          }
+        );
 
-            console.log(
-              'URL FILM :',
-              url
-            );
+      const result =
+        await downloadResumable.downloadAsync();
 
-            router.push({
-              pathname: '/player',
-              params: {
-                url,
-                title,
-              },
-            });
-          }}
+      if (!result?.uri) {
+        throw new Error(
+          'Le téléchargement est incomplet.'
+        );
+      }
+
+      setDownloadProgress(1);
+
+      ToastAndroid.show(
+        'Film téléchargé avec succès !',
+        ToastAndroid.LONG
+      );
+
+    } catch (err) {
+      console.error(
+        'ERREUR TÉLÉCHARGEMENT :',
+        err
+      );
+
+      ToastAndroid.show(
+        'Le téléchargement a échoué.',
+        ToastAndroid.LONG
+      );
+
+    } finally {
+      setDownloading(false);
+    }
+  }
+
+  /* --------------------------------------------------
+   * CHARGEMENT
+   * -------------------------------------------------- */
+
+  if (loading) {
+    return (
+      <SafeAreaView
+        style={styles.container}
+      >
+        <View style={styles.center}>
+          <ActivityIndicator
+            size="large"
+            color="#E50914"
+          />
+
+          <Text
+            style={styles.loadingText}
+          >
+            Chargement du film...
+          </Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  /* --------------------------------------------------
+   * ERREUR
+   * -------------------------------------------------- */
+
+  if (
+    error ||
+    !movie?.info
+  ) {
+    return (
+      <SafeAreaView
+        style={styles.container}
+      >
+        <View style={styles.center}>
+          <Text
+            style={styles.errorIcon}
+          >
+            ⚠️
+          </Text>
+
+          <Text
+            style={styles.errorText}
+          >
+            {error ??
+              'Film introuvable.'}
+          </Text>
+
+          <Pressable
+            style={styles.backButton}
+            onPress={() =>
+              router.back()
+            }
+          >
+            <Text
+              style={
+                styles.backButtonText
+              }
+            >
+              Retour
+            </Text>
+          </Pressable>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  const info =
+    movie.info;
+
+  const title =
+    info.name ||
+    info.o_name ||
+    'Film sans titre';
+
+  const poster =
+    info.cover_big ||
+    info.movie_image ||
+    null;
+
+  const description =
+    info.description ||
+    info.plot ||
+    'Aucune description disponible.';
+
+  return (
+    <SafeAreaView
+      style={styles.container}
+    >
+      <ScrollView
+        showsVerticalScrollIndicator={
+          false
+        }
+        contentContainerStyle={
+          styles.content
+        }
+      >
+        <Pressable
+          style={styles.back}
+          onPress={() =>
+            router.back()
+          }
         >
-          <Text style={styles.playButtonText}>
-            ▶  Lire
+          <Text
+            style={styles.backText}
+          >
+            ‹ Retour
           </Text>
         </Pressable>
-      </View>
 
-      <Text style={styles.sectionTitle}>
-        Description
-      </Text>
+        {poster ? (
+          <Image
+            source={{
+              uri: poster,
+            }}
+            style={styles.poster}
+            resizeMode="cover"
+          />
+        ) : (
+          <View
+            style={
+              styles.posterFallback
+            }
+          >
+            <Text
+              style={
+                styles.posterFallbackText
+              }
+            >
+              🎬
+            </Text>
+          </View>
+        )}
 
-      <Text style={styles.description}>
-        {description}
-      </Text>
-
-      {info.genre ? (
-        <>
-          <Text style={styles.sectionTitle}>
-            Genre
+        <View
+          style={
+            styles.infoContainer
+          }
+        >
+          <Text
+            style={styles.title}
+          >
+            {title}
           </Text>
 
-          <Text style={styles.detail}>
-            {info.genre}
+          <View
+            style={styles.metaRow}
+          >
+            {info.rating ? (
+              <View
+                style={
+                  styles.metaBadge
+                }
+              >
+                <Text
+                  style={
+                    styles.metaText
+                  }
+                >
+                  ⭐ {info.rating}
+                </Text>
+              </View>
+            ) : null}
+
+            {info.duration ? (
+              <View
+                style={
+                  styles.metaBadge
+                }
+              >
+                <Text
+                  style={
+                    styles.metaText
+                  }
+                >
+                  ⏱️ {info.duration}
+                </Text>
+              </View>
+            ) : null}
+
+            {info.releasedate ? (
+              <View
+                style={
+                  styles.metaBadge
+                }
+              >
+                <Text
+                  style={
+                    styles.metaText
+                  }
+                >
+                  📅 {info.releasedate}
+                </Text>
+              </View>
+            ) : null}
+          </View>
+
+          <View
+            style={styles.actions}
+          >
+            <Pressable
+              style={
+                styles.playButton
+              }
+              onPress={() => {
+                /*
+                 * La configuration Xtream
+                 * est maintenant récupérée
+                 * depuis le backend.
+                 */
+                getUserAccess()
+                  .then((access) => {
+                    if (
+                      !access.subscription
+                    ) {
+                      ToastAndroid.show(
+                        'Aucun abonnement actif.',
+                        ToastAndroid.LONG
+                      );
+
+                      return;
+                    }
+
+                    if (
+                      !access.limits ||
+                      access.limits.movies <= 0
+                    ) {
+                      ToastAndroid.show(
+                        'Votre abonnement ne permet pas l’accès aux films.',
+                        ToastAndroid.LONG
+                      );
+
+                      return;
+                    }
+
+                    if (
+                      !access.xtream
+                    ) {
+                      ToastAndroid.show(
+                        'Aucun serveur Xtream disponible.',
+                        ToastAndroid.LONG
+                      );
+
+                      return;
+                    }
+
+                    const client =
+                      new XtreamClient({
+                        server:
+                          access
+                            .xtream
+                            .server_url,
+
+                        username:
+                          access
+                            .xtream
+                            .username,
+
+                        password:
+                          access
+                            .xtream
+                            .password,
+                      });
+
+                    const streamId =
+                      movie
+                        .movie_data
+                        ?.stream_id;
+
+                    if (!streamId) {
+                      ToastAndroid.show(
+                        'ID du film introuvable.',
+                        ToastAndroid.LONG
+                      );
+
+                      return;
+                    }
+
+                    const url =
+                      client.getMovieUrl(
+                        String(
+                          streamId
+                        ),
+                        movie
+                          .movie_data
+                          ?.container_extension ||
+                          'mp4'
+                      );
+
+                    console.log(
+                      'URL FILM :',
+                      url
+                    );
+
+                    router.push({
+                      pathname:
+                        '/player',
+
+                      params: {
+                        url,
+                        title,
+                      },
+                    });
+                  })
+                  .catch((err) => {
+                    console.error(
+                      'ERREUR ACCÈS FILM :',
+                      err
+                    );
+
+                    ToastAndroid.show(
+                      'Impossible de lancer le film.',
+                      ToastAndroid.LONG
+                    );
+                  });
+              }}
+            >
+              <Text
+                style={
+                  styles.playButtonText
+                }
+              >
+                ▶  Lire
+              </Text>
+            </Pressable>
+          </View>
+
+          <Text
+            style={
+              styles.sectionTitle
+            }
+          >
+            Description
           </Text>
-        </>
-      ) : null}
 
-      {info.country ? (
-        <>
-          <Text style={styles.sectionTitle}>
-            Pays
+          <Text
+            style={
+              styles.description
+            }
+          >
+            {description}
           </Text>
 
-          <Text style={styles.detail}>
-            {info.country}
+          {info.genre ? (
+            <>
+              <Text
+                style={
+                  styles.sectionTitle
+                }
+              >
+                Genre
+              </Text>
+
+              <Text
+                style={styles.detail}
+              >
+                {info.genre}
+              </Text>
+            </>
+          ) : null}
+
+          {info.country ? (
+            <>
+              <Text
+                style={
+                  styles.sectionTitle
+                }
+              >
+                Pays
+              </Text>
+
+              <Text
+                style={styles.detail}
+              >
+                {info.country}
+              </Text>
+            </>
+          ) : null}
+
+          {info.director ? (
+            <>
+              <Text
+                style={
+                  styles.sectionTitle
+                }
+              >
+                Réalisateur
+              </Text>
+
+              <Text
+                style={styles.detail}
+              >
+                {info.director}
+              </Text>
+            </>
+          ) : null}
+
+          {info.actors ||
+          info.cast ? (
+            <>
+              <Text
+                style={
+                  styles.sectionTitle
+                }
+              >
+                Acteurs
+              </Text>
+
+              <Text
+                style={styles.detail}
+              >
+                {info.actors ||
+                  info.cast}
+              </Text>
+            </>
+          ) : null}
+
+          {info.age ? (
+            <>
+              <Text
+                style={
+                  styles.sectionTitle
+                }
+              >
+                Classification
+              </Text>
+
+              <Text
+                style={styles.detail}
+              >
+                {info.age}
+              </Text>
+            </>
+          ) : null}
+        </View>
+      </ScrollView>
+
+      <Pressable
+        style={[
+          styles.downloadButton,
+          downloading &&
+            styles.downloadButtonActive,
+        ]}
+        onPress={downloadMovie}
+        disabled={downloading}
+      >
+        {downloading ? (
+          <>
+            <ActivityIndicator
+              size="small"
+              color="#FFFFFF"
+            />
+
+            <Text
+              style={
+                styles.progressText
+              }
+            >
+              {Math.round(
+                downloadProgress *
+                  100
+              )}
+              %
+            </Text>
+          </>
+        ) : (
+          <Text
+            style={
+              styles.downloadIcon
+            }
+          >
+            ⬇
           </Text>
-        </>
-      ) : null}
-
-      {info.director ? (
-        <>
-          <Text style={styles.sectionTitle}>
-            Réalisateur
-          </Text>
-
-          <Text style={styles.detail}>
-            {info.director}
-          </Text>
-        </>
-      ) : null}
-
-      {info.actors || info.cast ? (
-        <>
-          <Text style={styles.sectionTitle}>
-            Acteurs
-          </Text>
-
-          <Text style={styles.detail}>
-            {info.actors || info.cast}
-          </Text>
-        </>
-      ) : null}
-
-      {info.age ? (
-        <>
-          <Text style={styles.sectionTitle}>
-            Classification
-          </Text>
-
-          <Text style={styles.detail}>
-            {info.age}
-          </Text>
-        </>
-      ) : null}
-    </View>
-  </ScrollView>
-
-  <Pressable
-    style={[
-      styles.downloadButton,
-      downloading && styles.downloadButtonActive,
-    ]}
-    onPress={downloadMovie}
-    disabled={downloading}
-  >
-    {downloading ? (
-      <>
-        <ActivityIndicator
-          size="small"
-          color="#FFFFFF"
-        />
-
-        <Text style={styles.progressText}>
-          {Math.round(
-            downloadProgress * 100
-          )}%
-        </Text>
-      </>
-    ) : (
-      <Text style={styles.downloadIcon}>
-        ⬇
-      </Text>
-    )}
-  </Pressable>
-</SafeAreaView>
-
-);
+        )}
+      </Pressable>
+    </SafeAreaView>
+  );
 }
 
 const styles = StyleSheet.create({
-container: {
-flex: 1,
-backgroundColor: '#080808',
-},
+  container: {
+    flex: 1,
+    backgroundColor: '#080808',
+  },
 
-content: {
-paddingBottom: 40,
-},
+  content: {
+    paddingBottom: 40,
+  },
 
-center: {
-flex: 1,
-alignItems: 'center',
-justifyContent: 'center',
-paddingHorizontal: 30,
-},
+  center: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 30,
+  },
 
-loadingText: {
-color: '#AAAAAA',
-fontSize: 15,
-marginTop: 14,
-},
+  loadingText: {
+    color: '#AAAAAA',
+    fontSize: 15,
+    marginTop: 14,
+  },
 
-errorIcon: {
-fontSize: 42,
-marginBottom: 15,
-},
+  errorIcon: {
+    fontSize: 42,
+    marginBottom: 15,
+  },
 
-errorText: {
-color: '#FFFFFF',
-fontSize: 16,
-textAlign: 'center',
-marginBottom: 25,
-},
+  errorText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    textAlign: 'center',
+    marginBottom: 25,
+  },
 
-back: {
-paddingHorizontal: 20,
-paddingVertical: 15,
-},
+  back: {
+    paddingHorizontal: 20,
+    paddingVertical: 15,
+  },
 
-backText: {
-color: '#FFFFFF',
-fontSize: 17,
-fontWeight: '600',
-},
+  backText: {
+    color: '#FFFFFF',
+    fontSize: 17,
+    fontWeight: '600',
+  },
 
-poster: {
-width: '100%',
-height: 500,
-backgroundColor: '#151515',
-},
+  poster: {
+    width: '100%',
+    height: 500,
+    backgroundColor: '#151515',
+  },
 
-posterFallback: {
-width: '100%',
-height: 500,
-backgroundColor: '#151515',
-alignItems: 'center',
-justifyContent: 'center',
-},
+  posterFallback: {
+    width: '100%',
+    height: 500,
+    backgroundColor: '#151515',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 
-posterFallbackText: {
-fontSize: 70,
-},
+  posterFallbackText: {
+    fontSize: 70,
+  },
 
-infoContainer: {
-paddingHorizontal: 20,
-paddingTop: 20,
-},
+  infoContainer: {
+    paddingHorizontal: 20,
+    paddingTop: 20,
+  },
 
-title: {
-color: '#FFFFFF',
-fontSize: 27,
-fontWeight: '800',
-lineHeight: 34,
-},
+  title: {
+    color: '#FFFFFF',
+    fontSize: 27,
+    fontWeight: '800',
+    lineHeight: 34,
+  },
 
-metaRow: {
-flexDirection: 'row',
-flexWrap: 'wrap',
-gap: 8,
-marginTop: 14,
-},
+  metaRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 14,
+  },
 
-metaBadge: {
-backgroundColor: '#181818',
-borderWidth: 1,
-borderColor: '#292929',
-borderRadius: 8,
-paddingHorizontal: 10,
-paddingVertical: 7,
-},
+  metaBadge: {
+    backgroundColor: '#181818',
+    borderWidth: 1,
+    borderColor: '#292929',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
 
-metaText: {
-color: '#CCCCCC',
-fontSize: 13,
-},
+  metaText: {
+    color: '#CCCCCC',
+    fontSize: 13,
+  },
 
-actions: {
-marginTop: 22,
-},
+  actions: {
+    marginTop: 22,
+  },
 
-playButton: {
-backgroundColor: '#E50914',
-borderRadius: 10,
-height: 52,
-alignItems: 'center',
-justifyContent: 'center',
-},
+  playButton: {
+    backgroundColor: '#E50914',
+    borderRadius: 10,
+    height: 52,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 
-playButtonText: {
-color: '#FFFFFF',
-fontSize: 17,
-fontWeight: '800',
-},
+  playButtonText: {
+    color: '#FFFFFF',
+    fontSize: 17,
+    fontWeight: '800',
+  },
 
-sectionTitle: {
-color: '#FFFFFF',
-fontSize: 19,
-fontWeight: '700',
-marginTop: 28,
-marginBottom: 10,
-},
+  sectionTitle: {
+    color: '#FFFFFF',
+    fontSize: 19,
+    fontWeight: '700',
+    marginTop: 28,
+    marginBottom: 10,
+  },
 
-description: {
-color: '#BBBBBB',
-fontSize: 15,
-lineHeight: 23,
-},
+  description: {
+    color: '#BBBBBB',
+    fontSize: 15,
+    lineHeight: 23,
+  },
 
-detail: {
-color: '#CCCCCC',
-fontSize: 15,
-lineHeight: 22,
-},
+  detail: {
+    color: '#CCCCCC',
+    fontSize: 15,
+    lineHeight: 22,
+  },
 
-backButton: {
-backgroundColor: '#E50914',
-paddingHorizontal: 25,
-paddingVertical: 12,
-borderRadius: 8,
-},
+  backButton: {
+    backgroundColor: '#E50914',
+    paddingHorizontal: 25,
+    paddingVertical: 12,
+    borderRadius: 8,
+  },
 
-backButtonText: {
-color: '#FFFFFF',
-fontSize: 15,
-fontWeight: '700',
-},
+  backButtonText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '700',
+  },
 
-downloadButton: {
-position: 'absolute',
-right: 20,
-bottom: 25,
-width: 62,
-height: 62,
-borderRadius: 31,
-backgroundColor: '#E50914',
-justifyContent: 'center',
-alignItems: 'center',
-elevation: 8,
-},
+  downloadButton: {
+    position: 'absolute',
+    right: 20,
+    bottom: 25,
+    width: 62,
+    height: 62,
+    borderRadius: 31,
+    backgroundColor: '#E50914',
+    justifyContent: 'center',
+    alignItems: 'center',
+    elevation: 8,
+  },
 
-downloadButtonActive: {
-width: 72,
-height: 72,
-borderRadius: 36,
-},
+  downloadButtonActive: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+  },
 
-downloadIcon: {
-color: '#FFFFFF',
-fontSize: 28,
-fontWeight: 'bold',
-},
+  downloadIcon: {
+    color: '#FFFFFF',
+    fontSize: 28,
+    fontWeight: 'bold',
+  },
 
-progressText: {
-color: '#FFFFFF',
-fontSize: 13,
-fontWeight: '800',
-marginTop: 3,
-},
+  progressText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '800',
+    marginTop: 3,
+  },
 });

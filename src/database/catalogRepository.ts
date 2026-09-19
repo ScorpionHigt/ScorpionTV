@@ -1,6 +1,11 @@
 ﻿import { initDatabase } from './database';
-import { XtreamClient } from '../api/xtreamClient';
-import { xtreamConfig } from '../api/config';
+
+import {
+  XtreamClient,
+  XtreamMovie,
+} from '../api/xtreamClient';
+
+import { getUserAccess } from '../api/accessApi';
 
 export type Movie = {
   stream_id: number;
@@ -27,7 +32,11 @@ export type MovieSyncProgress = {
   deleted: number;
   unchanged: number;
 
-  phase: 'checking' | 'syncing' | 'deleting' | 'done';
+  phase:
+    | 'checking'
+    | 'syncing'
+    | 'deleting'
+    | 'done';
 };
 
 export type MovieSyncResult = {
@@ -49,54 +58,169 @@ const BATCH_SIZE = 500;
 
 /*
 |--------------------------------------------------------------------------
+| CLIENT XTREAM
+|--------------------------------------------------------------------------
+*/
+
+async function getMovieXtreamClient(): Promise<{
+  client: XtreamClient;
+  adultAccess: boolean;
+}> {
+  const access = await getUserAccess();
+
+  if (!access.xtream) {
+    throw new Error(
+      'Aucune configuration Xtream disponible pour cet utilisateur.'
+    );
+  }
+
+  return {
+    client: new XtreamClient({
+      server: access.xtream.server_url,
+      username: access.xtream.username,
+      password: access.xtream.password,
+    }),
+    adultAccess:
+      access.limits?.adult ?? false,
+  };
+}
+
+/*
+|--------------------------------------------------------------------------
+| DÉTECTION CONTENU ADULTE
+|--------------------------------------------------------------------------
+*/
+
+function isAdultMovie(
+  movie: XtreamMovie
+): boolean {
+  if (movie.is_adult) {
+    return true;
+  }
+
+  const normalizedName =
+    movie.name
+      ?.toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .trim() ?? '';
+
+  return (
+    normalizedName.includes('adult') ||
+    normalizedName.includes('xxx')
+  );
+}
+
+/*
+|--------------------------------------------------------------------------
 | CATÉGORIES
 |--------------------------------------------------------------------------
 */
 
-export async function syncCategories() {
+export async function syncCategories(
+  client?: XtreamClient,
+  adultAccess?: boolean
+) {
   const db = await initDatabase();
 
-  const client = new XtreamClient(xtreamConfig);
+  let xtreamClient = client;
+  let allowAdult = adultAccess;
 
-  const categories = await client.getVodCategories();
+  if (!xtreamClient) {
+    const movieAccess =
+      await getMovieXtreamClient();
+
+    xtreamClient =
+      movieAccess.client;
+
+    allowAdult =
+      movieAccess.adultAccess;
+  }
+
+  const categories =
+    await xtreamClient.getVodCategories();
 
   console.log(
-    'CATÉGORIES RÉCUPÉRÉES :',
+    'CATÉGORIES FILMS RÉCUPÉRÉES :',
     categories.length
   );
 
-  await db.withTransactionAsync(async () => {
-    await db.execAsync('DELETE FROM categories;');
+  const accessibleCategories =
+    allowAdult
+      ? categories
+      : categories.filter(
+          (category) => {
+            const normalizedName =
+              category.category_name
+                ?.toLowerCase()
+                .normalize('NFD')
+                .replace(
+                  /[\u0300-\u036f]/g,
+                  ''
+                )
+                .trim() ?? '';
 
-    for (const category of categories) {
-      await db.runAsync(
-        `
-        INSERT INTO categories (
-          category_id,
-          category_name,
-          icon,
-          is_adult,
-          parent_id,
-          stream_count
-        )
-        VALUES (?, ?, ?, ?, ?, ?)
-        `,
-        category.category_id,
-        category.category_name,
-        category.icon ?? null,
-        category.is_adult ?? 0,
-        category.parent_id ?? 0,
-        category.stream_count ?? 0
+            return (
+              !category.is_adult &&
+              !normalizedName.includes(
+                'adult'
+              ) &&
+              !normalizedName.includes(
+                'xxx'
+              )
+            );
+          }
+        );
+
+  console.log(
+    'CATÉGORIES FILMS ACCESSIBLES :',
+    accessibleCategories.length
+  );
+
+  await db.withTransactionAsync(
+    async () => {
+      /*
+      ----------------------------------------------------------
+      On reconstruit les catégories.
+      ----------------------------------------------------------
+      */
+
+      await db.execAsync(
+        'DELETE FROM categories;'
       );
-    }
-  });
 
-  console.log(
-    'SYNCHRONISATION CATÉGORIES TERMINÉE :',
-    categories.length
+      for (
+        const category of accessibleCategories
+      ) {
+        await db.runAsync(
+          `
+          INSERT INTO categories (
+            category_id,
+            category_name,
+            icon,
+            is_adult,
+            parent_id,
+            stream_count
+          )
+          VALUES (?, ?, ?, ?, ?, ?)
+          `,
+          category.category_id,
+          category.category_name,
+          category.icon ?? null,
+          category.is_adult ?? 0,
+          category.parent_id ?? 0,
+          category.stream_count ?? 0
+        );
+      }
+    }
   );
 
-  return categories.length;
+  console.log(
+    'SYNCHRONISATION CATÉGORIES FILMS TERMINÉE :',
+    accessibleCategories.length
+  );
+
+  return accessibleCategories.length;
 }
 
 /*
@@ -104,11 +228,28 @@ export async function syncCategories() {
 | SIGNATURE D'UN FILM
 |--------------------------------------------------------------------------
 |
-| Permet de déterminer si un film existant a réellement changé.
+| Permet de déterminer si un film existant
+| a réellement changé.
 |
 */
 
-function getMovieSignature(movie: any): string {
+type MovieSignatureData = {
+  name?: string | null;
+  stream_type?: string | null;
+  stream_icon?: string | null;
+  rating?: string | null;
+  rating_5based?: number | null;
+  added?: string | null;
+  is_adult?: string | number | null;
+  container_extension?: string | null;
+  custom_sid?: string | null;
+  direct_source?: string | null;
+  category_id?: string | null;
+};
+
+function getMovieSignature(
+  movie: MovieSignatureData
+): string {
   return JSON.stringify([
     movie.name ?? null,
     movie.stream_type ?? null,
@@ -123,7 +264,6 @@ function getMovieSignature(movie: any): string {
     movie.category_id ?? null,
   ]);
 }
-
 /*
 |--------------------------------------------------------------------------
 | SYNCHRONISATION INTELLIGENTE DES FILMS
@@ -131,19 +271,36 @@ function getMovieSignature(movie: any): string {
 */
 
 export async function syncMoviesWithProgress(
-  onProgress?: (progress: MovieSyncProgress) => void
+  onProgress?: (
+    progress: MovieSyncProgress
+  ) => void
 ): Promise<MovieSyncResult> {
   const db = await initDatabase();
 
-  const client = new XtreamClient(xtreamConfig);
+  /*
+  |--------------------------------------------------------------------------
+  | RÉCUPÉRATION ACCÈS UTILISATEUR
+  |--------------------------------------------------------------------------
+  */
+
+  const movieAccess =
+    await getMovieXtreamClient();
+
+  const client =
+    movieAccess.client;
+
+  const adultAccess =
+    movieAccess.adultAccess;
 
   /*
-   * ---------------------------------------------------------------
-   * ÉTAPE 1 : récupération Xtream
-   * ---------------------------------------------------------------
-   */
+  |--------------------------------------------------------------------------
+  | ÉTAPE 1 : récupération Xtream
+  |--------------------------------------------------------------------------
+  */
 
-  console.log('FILMS : récupération depuis Xtream...');
+  console.log(
+    'FILMS : récupération depuis Xtream...'
+  );
 
   onProgress?.({
     current: 0,
@@ -155,50 +312,71 @@ export async function syncMoviesWithProgress(
     phase: 'checking',
   });
 
-  const movies = await client.getVodStreams();
+  const remoteMovies =
+    await client.getVodStreams();
 
   console.log(
     'FILMS RÉCUPÉRÉS DEPUIS XTREAM :',
+    remoteMovies.length
+  );
+
+  /*
+  |--------------------------------------------------------------------------
+  | FILTRAGE CONTENU ADULTE
+  |--------------------------------------------------------------------------
+  */
+
+  const movies =
+    adultAccess
+      ? remoteMovies
+      : remoteMovies.filter(
+          (movie) =>
+            !isAdultMovie(movie)
+        );
+
+  console.log(
+    'FILMS ACCESSIBLES :',
     movies.length
   );
 
   /*
-   * ---------------------------------------------------------------
-   * ÉTAPE 2 : récupération SQLite
-   * ---------------------------------------------------------------
-   */
+  |--------------------------------------------------------------------------
+  | ÉTAPE 2 : récupération SQLite
+  |--------------------------------------------------------------------------
+  */
 
-  const localMovies = await db.getAllAsync<{
-    stream_id: number;
-    name: string | null;
-    stream_type: string | null;
-    stream_icon: string | null;
-    rating: string | null;
-    rating_5based: number | null;
-    added: string | null;
-    is_adult: number | null;
-    container_extension: string | null;
-    custom_sid: string | null;
-    direct_source: string | null;
-    category_id: string | null;
-  }>(
-    `
-    SELECT
-      stream_id,
-      name,
-      stream_type,
-      stream_icon,
-      rating,
-      rating_5based,
-      added,
-      is_adult,
-      container_extension,
-      custom_sid,
-      direct_source,
-      category_id
-    FROM movies
-    `
-  );
+  const localMovies =
+    await db.getAllAsync<{
+      stream_id: number;
+      name: string | null;
+      stream_type: string | null;
+      stream_icon: string | null;
+      rating: string | null;
+      rating_5based: number | null;
+      added: string | null;
+      is_adult: number | null;
+      container_extension: string | null;
+      custom_sid: string | null;
+      direct_source: string | null;
+      category_id: string | null;
+    }>(
+      `
+      SELECT
+        stream_id,
+        name,
+        stream_type,
+        stream_icon,
+        rating,
+        rating_5based,
+        added,
+        is_adult,
+        container_extension,
+        custom_sid,
+        direct_source,
+        category_id
+      FROM movies
+      `
+    );
 
   console.log(
     'FILMS PRÉSENTS DANS SQLITE :',
@@ -206,10 +384,10 @@ export async function syncMoviesWithProgress(
   );
 
   /*
-   * ---------------------------------------------------------------
-   * ÉTAPE 3 : indexation
-   * ---------------------------------------------------------------
-   */
+  |--------------------------------------------------------------------------
+  | ÉTAPE 3 : indexation
+  |--------------------------------------------------------------------------
+  */
 
   const localMap = new Map<
     number,
@@ -217,7 +395,10 @@ export async function syncMoviesWithProgress(
   >();
 
   for (const movie of localMovies) {
-    localMap.set(movie.stream_id, movie);
+    localMap.set(
+      movie.stream_id,
+      movie
+    );
   }
 
   const remoteMap = new Map<
@@ -226,22 +407,32 @@ export async function syncMoviesWithProgress(
   >();
 
   for (const movie of movies) {
-    remoteMap.set(movie.stream_id, movie);
+    remoteMap.set(
+      movie.stream_id,
+      movie
+    );
   }
 
   /*
-   * ---------------------------------------------------------------
-   * ÉTAPE 4 : comparaison des IDs
-   * ---------------------------------------------------------------
-   */
+  |--------------------------------------------------------------------------
+  | ÉTAPE 4 : comparaison des IDs
+  |--------------------------------------------------------------------------
+  */
 
-  const localIds = new Set(localMap.keys());
-  const remoteIds = new Set(remoteMap.keys());
+  const localIds =
+    new Set(localMap.keys());
 
-  let sameIds = localIds.size === remoteIds.size;
+  const remoteIds =
+    new Set(remoteMap.keys());
+
+  let sameIds =
+    localIds.size ===
+    remoteIds.size;
 
   if (sameIds) {
-    for (const id of remoteIds) {
+    for (
+      const id of remoteIds
+    ) {
       if (!localIds.has(id)) {
         sameIds = false;
         break;
@@ -250,10 +441,10 @@ export async function syncMoviesWithProgress(
   }
 
   /*
-   * ---------------------------------------------------------------
-   * COMPTEURS
-   * ---------------------------------------------------------------
-   */
+  |--------------------------------------------------------------------------
+  | COMPTEURS
+  |--------------------------------------------------------------------------
+  */
 
   let added = 0;
   let updated = 0;
@@ -261,11 +452,10 @@ export async function syncMoviesWithProgress(
   let unchanged = 0;
 
   /*
-   * ---------------------------------------------------------------
-   * ÉTAPE 5 : si les IDs sont identiques,
-   * vérification des changements
-   * ---------------------------------------------------------------
-   */
+  |--------------------------------------------------------------------------
+  | ÉTAPE 5 : vérification des modifications
+  |--------------------------------------------------------------------------
+  */
 
   if (sameIds) {
     console.log(
@@ -278,31 +468,45 @@ export async function syncMoviesWithProgress(
 
     let hasChanges = false;
 
-    for (const movie of movies) {
-      const localMovie = localMap.get(movie.stream_id);
+    for (
+      const movie of movies
+    ) {
+      const localMovie =
+        localMap.get(
+          movie.stream_id
+        );
 
       if (!localMovie) {
         hasChanges = true;
         break;
       }
 
-      const remoteSignature = getMovieSignature(movie);
-      const localSignature = getMovieSignature(localMovie);
+      const remoteSignature =
+        getMovieSignature(movie);
 
-      if (remoteSignature !== localSignature) {
+      const localSignature =
+        getMovieSignature(
+          localMovie
+        );
+
+      if (
+        remoteSignature !==
+        localSignature
+      ) {
         hasChanges = true;
         break;
       }
     }
 
     /*
-     * -------------------------------------------------------------
-     * AUCUN CHANGEMENT
-     * -------------------------------------------------------------
-     */
+    ----------------------------------------------------------------
+    | AUCUN CHANGEMENT
+    ----------------------------------------------------------------
+    */
 
     if (!hasChanges) {
-      unchanged = movies.length;
+      unchanged =
+        movies.length;
 
       console.log(
         'FILMS : contenu identique, aucune synchronisation nécessaire.'
@@ -356,12 +560,13 @@ export async function syncMoviesWithProgress(
   }
 
   /*
-   * ---------------------------------------------------------------
-   * ÉTAPE 6 : synchronisation par lots
-   * ---------------------------------------------------------------
-   */
+  |--------------------------------------------------------------------------
+  | ÉTAPE 6 : synchronisation par lots
+  |--------------------------------------------------------------------------
+  */
 
-  const total = movies.length;
+  const total =
+    movies.length;
 
   console.log(
     'FILMS : synchronisation par lots de',
@@ -379,57 +584,126 @@ export async function syncMoviesWithProgress(
   });
 
   /*
-   * ---------------------------------------------------------------
-   * TRAITEMENT DES LOTS
-   * ---------------------------------------------------------------
-   */
+  |--------------------------------------------------------------------------
+  | TRAITEMENT DES LOTS
+  |--------------------------------------------------------------------------
+  */
 
   for (
     let batchStart = 0;
     batchStart < movies.length;
     batchStart += BATCH_SIZE
   ) {
-    const batch = movies.slice(
-      batchStart,
-      batchStart + BATCH_SIZE
-    );
+    const batch =
+      movies.slice(
+        batchStart,
+        batchStart + BATCH_SIZE
+      );
 
-    /*
-     * Une transaction SQLite pour chaque lot.
-     */
+    await db.withTransactionAsync(
+      async () => {
+        for (
+          const movie of batch
+        ) {
+          const localMovie =
+            localMap.get(
+              movie.stream_id
+            );
 
-    await db.withTransactionAsync(async () => {
-      for (const movie of batch) {
-        const localMovie = localMap.get(
-          movie.stream_id
-        );
+          /*
+          ----------------------------------------------------------
+          | NOUVEAU FILM
+          ----------------------------------------------------------
+          */
 
-        /*
-         * ---------------------------------------------------------
-         * NOUVEAU FILM
-         * ---------------------------------------------------------
-         */
+          if (!localMovie) {
+            await db.runAsync(
+              `
+              INSERT INTO movies (
+                stream_id,
+                name,
+                stream_type,
+                stream_icon,
+                rating,
+                rating_5based,
+                added,
+                is_adult,
+                container_extension,
+                custom_sid,
+                direct_source,
+                category_id
+              )
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              `,
+              movie.stream_id,
+              movie.name,
+              movie.stream_type,
+              movie.stream_icon,
+              movie.rating,
+              movie.rating_5based,
+              movie.added,
+              movie.is_adult,
+              movie.container_extension,
+              movie.custom_sid,
+              movie.direct_source,
+              movie.category_id
+            );
 
-        if (!localMovie) {
+            added++;
+
+            continue;
+          }
+
+          /*
+          ----------------------------------------------------------
+          | FILM EXISTANT
+          ----------------------------------------------------------
+          */
+
+          const remoteSignature =
+            getMovieSignature(
+              movie
+            );
+
+          const localSignature =
+            getMovieSignature(
+              localMovie
+            );
+
+          /*
+          Aucun changement
+          */
+
+          if (
+            remoteSignature ===
+            localSignature
+          ) {
+            unchanged++;
+
+            continue;
+          }
+
+          /*
+          Film modifié
+          */
+
           await db.runAsync(
             `
-            INSERT INTO movies (
-              stream_id,
-              name,
-              stream_type,
-              stream_icon,
-              rating,
-              rating_5based,
-              added,
-              is_adult,
-              container_extension,
-              custom_sid,
-              direct_source,
-              category_id
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            UPDATE movies
+            SET
+              name = ?,
+              stream_type = ?,
+              stream_icon = ?,
+              rating = ?,
+              rating_5based = ?,
+              added = ?,
+              is_adult = ?,
+              container_extension = ?,
+              custom_sid = ?,
+              direct_source = ?,
+              category_id = ?
+            WHERE stream_id = ?
             `,
-            movie.stream_id,
             movie.name,
             movie.stream_type,
             movie.stream_icon,
@@ -440,87 +714,21 @@ export async function syncMoviesWithProgress(
             movie.container_extension,
             movie.custom_sid,
             movie.direct_source,
-            movie.category_id
+            movie.category_id,
+            movie.stream_id
           );
 
-          added++;
-
-          continue;
+          updated++;
         }
-
-        /*
-         * ---------------------------------------------------------
-         * FILM EXISTANT
-         * ---------------------------------------------------------
-         */
-
-        const remoteSignature =
-          getMovieSignature(movie);
-
-        const localSignature =
-          getMovieSignature(localMovie);
-
-        /*
-         * Aucun changement
-         */
-
-        if (
-          remoteSignature === localSignature
-        ) {
-          unchanged++;
-
-          continue;
-        }
-
-        /*
-         * Film modifié
-         */
-
-        await db.runAsync(
-          `
-          UPDATE movies
-          SET
-            name = ?,
-            stream_type = ?,
-            stream_icon = ?,
-            rating = ?,
-            rating_5based = ?,
-            added = ?,
-            is_adult = ?,
-            container_extension = ?,
-            custom_sid = ?,
-            direct_source = ?,
-            category_id = ?
-          WHERE stream_id = ?
-          `,
-          movie.name,
-          movie.stream_type,
-          movie.stream_icon,
-          movie.rating,
-          movie.rating_5based,
-          movie.added,
-          movie.is_adult,
-          movie.container_extension,
-          movie.custom_sid,
-          movie.direct_source,
-          movie.category_id,
-          movie.stream_id
-        );
-
-        updated++;
       }
-    });
-
-    /*
-     * -------------------------------------------------------------
-     * PROGRESSION DU LOT
-     * -------------------------------------------------------------
-     */
-
-    const current = Math.min(
-      batchStart + batch.length,
-      total
     );
+
+    const current =
+      Math.min(
+        batchStart +
+          batch.length,
+        total
+      );
 
     console.log(
       `FILMS : ${current}/${total} | ` +
@@ -541,14 +749,17 @@ export async function syncMoviesWithProgress(
   }
 
   /*
-   * ---------------------------------------------------------------
-   * ÉTAPE 7 : recherche des films supprimés
-   * ---------------------------------------------------------------
-   */
+  |--------------------------------------------------------------------------
+  | ÉTAPE 7 : recherche des films supprimés
+  |--------------------------------------------------------------------------
+  */
 
-  const moviesToDelete: number[] = [];
+  const moviesToDelete: number[] =
+    [];
 
-  for (const localMovie of localMovies) {
+  for (
+    const localMovie of localMovies
+  ) {
     if (
       !remoteIds.has(
         localMovie.stream_id
@@ -561,12 +772,14 @@ export async function syncMoviesWithProgress(
   }
 
   /*
-   * ---------------------------------------------------------------
-   * ÉTAPE 8 : suppression par lots
-   * ---------------------------------------------------------------
-   */
+  |--------------------------------------------------------------------------
+  | ÉTAPE 8 : suppression par lots
+  |--------------------------------------------------------------------------
+  */
 
-  if (moviesToDelete.length > 0) {
+  if (
+    moviesToDelete.length > 0
+  ) {
     console.log(
       'FILMS À SUPPRIMER DE SQLITE :',
       moviesToDelete.length
@@ -574,7 +787,8 @@ export async function syncMoviesWithProgress(
 
     onProgress?.({
       current: 0,
-      total: moviesToDelete.length,
+      total:
+        moviesToDelete.length,
       added,
       updated,
       deleted: 0,
@@ -584,32 +798,40 @@ export async function syncMoviesWithProgress(
 
     for (
       let batchStart = 0;
-      batchStart < moviesToDelete.length;
+      batchStart <
+      moviesToDelete.length;
       batchStart += BATCH_SIZE
     ) {
-      const batch = moviesToDelete.slice(
-        batchStart,
-        batchStart + BATCH_SIZE
-      );
+      const batch =
+        moviesToDelete.slice(
+          batchStart,
+          batchStart + BATCH_SIZE
+        );
 
-      await db.withTransactionAsync(async () => {
-        for (const streamId of batch) {
-          await db.runAsync(
-            `
-            DELETE FROM movies
-            WHERE stream_id = ?
-            `,
-            streamId
-          );
+      await db.withTransactionAsync(
+        async () => {
+          for (
+            const streamId of batch
+          ) {
+            await db.runAsync(
+              `
+              DELETE FROM movies
+              WHERE stream_id = ?
+              `,
+              streamId
+            );
 
-          deleted++;
+            deleted++;
+          }
         }
-      });
-
-      const current = Math.min(
-        batchStart + batch.length,
-        moviesToDelete.length
       );
+
+      const current =
+        Math.min(
+          batchStart +
+            batch.length,
+          moviesToDelete.length
+        );
 
       console.log(
         `SUPPRESSION FILMS : ${current}/${moviesToDelete.length} | ` +
@@ -618,7 +840,8 @@ export async function syncMoviesWithProgress(
 
       onProgress?.({
         current,
-        total: moviesToDelete.length,
+        total:
+          moviesToDelete.length,
         added,
         updated,
         deleted,
@@ -629,10 +852,10 @@ export async function syncMoviesWithProgress(
   }
 
   /*
-   * ---------------------------------------------------------------
-   * ÉTAPE 9 : résultat
-   * ---------------------------------------------------------------
-   */
+  |--------------------------------------------------------------------------
+  | ÉTAPE 9 : résultat
+  |--------------------------------------------------------------------------
+  */
 
   const changed =
     added > 0 ||
@@ -713,30 +936,33 @@ export async function syncMovies() {
 export async function getMoviesCountFromDatabase(
   categoryId?: string
 ): Promise<number> {
-  const db = await initDatabase();
+  const db =
+    await initDatabase();
 
   let result;
 
   if (categoryId) {
-    result = await db.getFirstAsync<{
-      count: number;
-    }>(
-      `
-      SELECT COUNT(*) AS count
-      FROM movies
-      WHERE category_id = ?
-      `,
-      categoryId
-    );
+    result =
+      await db.getFirstAsync<{
+        count: number;
+      }>(
+        `
+        SELECT COUNT(*) AS count
+        FROM movies
+        WHERE category_id = ?
+        `,
+        categoryId
+      );
   } else {
-    result = await db.getFirstAsync<{
-      count: number;
-    }>(
-      `
-      SELECT COUNT(*) AS count
-      FROM movies
-      `
-    );
+    result =
+      await db.getFirstAsync<{
+        count: number;
+      }>(
+        `
+        SELECT COUNT(*) AS count
+        FROM movies
+        `
+      );
   }
 
   return Number(
@@ -751,7 +977,8 @@ export async function getMoviesCountFromDatabase(
 */
 
 export async function getCategoriesFromDatabase() {
-  const db = await initDatabase();
+  const db =
+    await initDatabase();
 
   const categories =
     await db.getAllAsync<{
@@ -786,7 +1013,8 @@ export async function getMoviesFromDatabase(
   limit: number = 100,
   offset: number = 0
 ): Promise<Movie[]> {
-  const db = await initDatabase();
+  const db =
+    await initDatabase();
 
   if (categoryId) {
     const movies =
@@ -865,10 +1093,13 @@ export async function searchMoviesFromDatabase(
   limit = 100,
   offset = 0
 ): Promise<Movie[]> {
-  const db = await initDatabase();
+  const db =
+    await initDatabase();
 
   const searchTerm =
-    '%' + search.trim() + '%';
+    '%' +
+    search.trim() +
+    '%';
 
   if (categoryId) {
     const movies =
@@ -931,10 +1162,13 @@ export async function getSearchMoviesCountFromDatabase(
   search: string,
   categoryId?: string
 ) {
-  const db = await initDatabase();
+  const db =
+    await initDatabase();
 
   const searchTerm =
-    '%' + search.trim() + '%';
+    '%' +
+    search.trim() +
+    '%';
 
   if (categoryId) {
     const result =

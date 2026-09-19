@@ -1,0 +1,24 @@
+﻿<svg
+  width="24"
+  height="24"
+  viewBox="0 0 24 24"
+  fill="none"
+  xmlns="http://www.w3.org/2000/svg"
+>
+  <!-- Tête -->
+  <circle
+    cx="12"
+    cy="8"
+    r="3.2"
+    stroke="currentColor"
+    stroke-width="1.8"
+  />
+
+  <!-- Corps -->
+  <path
+    d="M5 20C5.8 16.4 8.1 14.5 12 14.5C15.9 14.5 18.2 16.4 19 20"
+    stroke="currentColor"
+    stroke-width="1.8"
+    stroke-linecap="round"
+  />
+</svg>

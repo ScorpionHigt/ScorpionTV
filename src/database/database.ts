@@ -201,6 +201,30 @@ async function openDatabase() {
     );
   `);
 
+
+
+
+    /*
+  ============================================================
+  NOTIFICATIONS
+  ============================================================
+  */
+
+  await db.execAsync(`
+    CREATE TABLE IF NOT EXISTS notifications (
+      id INTEGER PRIMARY KEY NOT NULL,
+      user_id INTEGER NOT NULL,
+      subscription_id INTEGER,
+      notification_type TEXT NOT NULL,
+      title TEXT NOT NULL,
+      message TEXT NOT NULL,
+      is_read INTEGER NOT NULL DEFAULT 0,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      expires_at TEXT
+    );
+  `);
+
   console.log('SQLite ScorpionTV OK');
 
   return db;
