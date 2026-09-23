@@ -8,6 +8,7 @@ import {
   Text,
   View,
 } from 'react-native';
+import { logout } from '../../api/authApi';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useCallback, useEffect, useState } from 'react';
 import {
@@ -84,18 +85,26 @@ export default function ProfileScreen() {
     loadProfile();
   };
 
-  const handleLogout = async () => {
-    try {
-      await clearAuthSession();
+ 
+const handleLogout = async () => {
+  try {
+    console.log('DÉCONNEXION EN COURS...');
 
-      router.replace('/login');
-    } catch (error) {
-      console.error(
-        'ERREUR DÉCONNEXION :',
-        error
-      );
-    }
-  };
+    await logout();
+
+    console.log('DÉCONNEXION TERMINÉE');
+
+    router.replace('/login');
+  } catch (error) {
+    console.error(
+      'ERREUR DÉCONNEXION :',
+      error,
+    );
+
+    router.replace('/login');
+  }
+};
+
 
   const formatDate = (date: string) => {
     const parsedDate = new Date(date);

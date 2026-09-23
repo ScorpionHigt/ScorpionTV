@@ -8,7 +8,6 @@
 
 import {
   ActivityIndicator,
-  Alert,
   FlatList,
   Image,
   Modal,
@@ -24,6 +23,7 @@ import { router } from 'expo-router';
 import { Channel } from '../types/live';
 import { setZappingChannels } from '../store/liveZappingStore';
 import { XtreamClient } from '../api/xtreamClient';
+
 import {
   getUserAccess,
   UserAccessError,
@@ -32,9 +32,7 @@ import {
 import {
   getCachedLiveIcon,
   getLiveCategoriesFromDatabase,
-  getLiveChannelsCount,
   getLiveChannelsFromDatabase,
-  getSearchLiveChannelsCount,
   searchLiveChannelsFromDatabase,
   syncLiveTVIfNeeded,
   LiveSyncProgress,
@@ -44,6 +42,10 @@ import {
   getLocalProtection,
   verifyLocalProtection,
 } from '../storage/localProtectionStorage';
+
+import {
+  useDialog,
+} from '../components/dialogs/DialogProvider';
 
 type Category = {
   id: string;
@@ -62,6 +64,7 @@ type XtreamAccess = {
 };
 
 const PAGE_SIZE = 100;
+const DB_BATCH_SIZE = 500;
 
 /* ============================================================
    CARTE D'UNE CHAÎNE
@@ -79,7 +82,9 @@ const ChannelCard = memo(
   }) => {
     void iconCacheVersion;
 
-    const icon = getCachedLiveIcon(channel.stream_id);
+    const icon = getCachedLiveIcon(
+      channel.stream_id,
+    );
 
     const [imageError, setImageError] =
       useState(false);
@@ -148,6 +153,9 @@ const ChannelCard = memo(
 ============================================================ */
 
 export default function LiveScreen() {
+  const { showDialog } =
+    useDialog();
+
   const [categories, setCategories] =
     useState<Category[]>([]);
 
@@ -169,9 +177,6 @@ export default function LiveScreen() {
 
   const [loading, setLoading] =
     useState(true);
-
-  const [loadingMore, setLoadingMore] =
-    useState(false);
 
   const [syncing, setSyncing] =
     useState(false);
@@ -199,7 +204,7 @@ export default function LiveScreen() {
     useState(false);
 
   /* ============================================================
-     PROTECTION CATÉGORIE ADULTE
+     PROTECTION ADULTE
   ============================================================ */
 
   const [
@@ -226,22 +231,28 @@ export default function LiveScreen() {
     setPendingAdultCategory,
   ] = useState<Category | null>(null);
 
+  /*
+   * L'accès adulte de l'abonnement ne suffit pas.
+   * Le mot de passe local doit également avoir
+   * été validé pour afficher les chaînes adultes.
+   */
+  const [adultUnlocked, setAdultUnlocked] =
+    useState(false);
+
+  /* ============================================================
+     REFS
+  ============================================================ */
+
   const searchRequestRef =
     useRef(0);
-
-  const currentOffsetRef =
-    useRef(0);
-
-  const loadingMoreRef =
-    useRef(false);
-
-  const lastRequestedOffsetRef =
-    useRef<number | null>(null);
 
   const mountedRef =
     useRef(true);
 
   const initialLoadDoneRef =
+    useRef(false);
+
+  const initializedRef =
     useRef(false);
 
   const activeCategoryRef =
@@ -256,8 +267,8 @@ export default function LiveScreen() {
   }, [searchText]);
 
   /* ============================================================
-     IDENTIFICATION DE LA CATÉGORIE ADULTE
-  ============================================================ */
+     IDENTIFICATION CATÉGORIE ADULTE
+============================================================ */
 
   const isAdultCategory =
     useCallback(
@@ -281,8 +292,85 @@ export default function LiveScreen() {
       [],
     );
 
+ 
   /* ============================================================
-     VÉRIFICATION DE L'ACCÈS UTILISATEUR
+     IDENTIFICATION CHAÎNE ADULTE
+  ============================================================ */
+
+  const isAdultChannel =
+    useCallback(
+      (
+        channel: Channel,
+        adultCategoryIds: Set<string>,
+      ) => {
+        const categoryId =
+          channel.category_id !== null &&
+          channel.category_id !== undefined
+            ? String(channel.category_id)
+            : '';
+
+        /*
+         * Une chaîne est adulte si elle appartient
+         * à une catégorie adulte.
+         */
+        if (
+          categoryId &&
+          adultCategoryIds.has(categoryId)
+        ) {
+          return true;
+        }
+
+        /*
+         * Vérification du marqueur is_adult.
+         *
+         * Dans le type Channel, is_adult est
+         * string | null.
+         */
+        const adultValue =
+          String(
+            channel.is_adult ?? '',
+          )
+            .trim()
+            .toLocaleLowerCase('fr-FR');
+
+        if (
+          adultValue === '1' ||
+          adultValue === 'true' ||
+          adultValue === 'yes' ||
+          adultValue === 'oui'
+        ) {
+          return true;
+        }
+
+        /*
+         * Dernière sécurité :
+         * certaines listes Xtream mettent directement
+         * des mots-clés adultes dans le nom de la chaîne.
+         */
+        const normalizedName =
+          String(
+            channel.name ?? '',
+          )
+            .trim()
+            .toLocaleLowerCase('fr-FR')
+            .normalize('NFD')
+            .replace(
+              /[\u0300-\u036f]/g,
+              '',
+            );
+
+        return (
+          normalizedName.includes('adult') ||
+          normalizedName.includes('xxx') ||
+          normalizedName.includes('porn')
+        );
+      },
+      [],
+    );
+
+
+  /* ============================================================
+     VÉRIFICATION ACCÈS UTILISATEUR
   ============================================================ */
 
   const loadUserAccess =
@@ -296,7 +384,7 @@ export default function LiveScreen() {
           await getUserAccess();
 
         if (!mountedRef.current) {
-          return false;
+          return null;
         }
 
         if (
@@ -311,7 +399,7 @@ export default function LiveScreen() {
           setXtreamAccess(null);
           setAccessChecked(true);
 
-          return false;
+          return null;
         }
 
         const liveAccess: LiveAccess = {
@@ -329,9 +417,7 @@ export default function LiveScreen() {
             ),
         };
 
-        setAccess(liveAccess);
-
-        setXtreamAccess(
+        const serverAccess =
           result.xtream
             ? {
                 server_url:
@@ -341,9 +427,12 @@ export default function LiveScreen() {
                 password:
                   result.xtream.password,
               }
-            : null,
-        );
+            : null;
 
+        setAccess(liveAccess);
+        setXtreamAccess(
+          serverAccess,
+        );
         setAccessChecked(true);
 
         console.log(
@@ -361,7 +450,15 @@ export default function LiveScreen() {
           liveAccess.tv_channels,
         );
 
-        return true;
+        /*
+         * IMPORTANT :
+         * On retourne directement les données.
+         * On ne dépend donc pas du délai de setAccess().
+         */
+        return {
+          liveAccess,
+          serverAccess,
+        };
       } catch (error) {
         console.error(
           'ERREUR VÉRIFICATION ACCÈS LIVE TV :',
@@ -375,14 +472,14 @@ export default function LiveScreen() {
         ) {
           router.replace('/login');
 
-          return false;
+          return null;
         }
 
         if (mountedRef.current) {
           setAccessChecked(true);
         }
 
-        return false;
+        return null;
       }
     }, []);
 
@@ -405,7 +502,10 @@ export default function LiveScreen() {
                     category.category_id,
                   ),
                   name:
-                    category.category_name,
+                    String(
+                      category.category_name ??
+                        '',
+                    ),
                 };
 
               if (
@@ -437,7 +537,10 @@ export default function LiveScreen() {
                 category.category_id,
               ),
               name:
-                category.category_name,
+                String(
+                  category.category_name ??
+                    '',
+                ),
             }),
           ),
         ];
@@ -446,86 +549,395 @@ export default function LiveScreen() {
     );
 
   /* ============================================================
-     LIMITATION DES CHAÎNES SELON L'ABONNEMENT
+     IDS DES CATÉGORIES ADULTES
   ============================================================ */
 
-  const applyChannelLimit =
+  const getAdultCategoryIds =
     useCallback(
       (
-        rows: Channel[],
-        offset: number,
-      ): Channel[] => {
-        const limit =
-          access?.tv_channels ?? 0;
-
-        if (limit <= 0) {
-          return [];
-        }
-
-        if (offset >= limit) {
-          return [];
-        }
-
-        const remaining =
-          limit - offset;
-
-        return rows.slice(
-          0,
-          Math.min(
-            rows.length,
-            remaining,
-          ),
+        rows: Category[],
+      ) => {
+        return new Set(
+          rows
+            .filter(
+              category =>
+                isAdultCategory(
+                  category,
+                ),
+            )
+            .map(
+              category =>
+                String(
+                  category.id,
+                ),
+            ),
         );
       },
-      [access],
+      [isAdultCategory],
     );
 
   /* ============================================================
-     LECTURE DES CATÉGORIES DEPUIS SQLITE
+     LECTURE DE TOUTES LES CHAÎNES D'UNE CATÉGORIE
   ============================================================ */
 
-  const loadCategories =
-    useCallback(async () => {
-      try {
-        const rows =
-          await getLiveCategoriesFromDatabase();
+  const getAllCategoryChannels =
+    useCallback(
+      async (
+        categoryId: string,
+        search: string,
+      ): Promise<Channel[]> => {
+        const result: Channel[] = [];
 
-        if (!mountedRef.current) {
-          return;
-        }
+        let offset = 0;
 
-        const formattedCategories =
-          filterCategories(
-            rows,
-            access?.adult ?? false,
+        while (true) {
+          const batch =
+            search
+              ? await searchLiveChannelsFromDatabase(
+                  search,
+                  categoryId,
+                  DB_BATCH_SIZE,
+                  offset,
+                )
+              : await getLiveChannelsFromDatabase(
+                  categoryId,
+                  DB_BATCH_SIZE,
+                  offset,
+                );
+
+          if (
+            batch.length === 0
+          ) {
+            break;
+          }
+
+          result.push(
+            ...batch,
           );
 
-        setCategories(
-          formattedCategories,
+          offset +=
+            batch.length;
+
+          if (
+            batch.length <
+            DB_BATCH_SIZE
+          ) {
+            break;
+          }
+        }
+
+        return result;
+      },
+      [],
+    );
+
+  /* ============================================================
+     CONSTRUCTION DE LA LISTE "TOUTES"
+
+     RÈGLE :
+     - tv_channels = quota des chaînes normales
+     - adulte autorisé + déverrouillé :
+       toutes les chaînes adultes sont ajoutées
+     - adulte non autorisé :
+       aucune chaîne adulte
+  ============================================================ */
+
+  const getAllAccessibleChannels =
+    useCallback(
+      async (
+        dbCategories: Category[],
+        liveAccess: LiveAccess,
+        unlockedAdult: boolean,
+        search = '',
+      ): Promise<Channel[]> => {
+        const adultCategoryIds =
+          getAdultCategoryIds(
+            dbCategories,
+          );
+
+        const normalChannels: Channel[] =
+          [];
+
+        const adultChannels: Channel[] =
+          [];
+
+        const adultIds =
+          new Set<number>();
+
+        /*
+         * ------------------------------------------------------
+         * 1. PARCOURS SQLITE DANS L'ORDRE
+         *
+         * On continue jusqu'à avoir obtenu
+         * suffisamment de chaînes normales.
+         * ------------------------------------------------------
+         */
+
+        let offset = 0;
+
+        while (
+          normalChannels.length <
+          liveAccess.tv_channels
+        ) {
+          const batch =
+            search
+              ? await searchLiveChannelsFromDatabase(
+                  search,
+                  undefined,
+                  DB_BATCH_SIZE,
+                  offset,
+                )
+              : await getLiveChannelsFromDatabase(
+                  undefined,
+                  DB_BATCH_SIZE,
+                  offset,
+                );
+
+          if (
+            batch.length === 0
+          ) {
+            break;
+          }
+
+          for (
+            const channel of batch
+          ) {
+            const adult =
+              isAdultChannel(
+                channel,
+                adultCategoryIds,
+              );
+
+            if (adult) {
+              /*
+               * Les adultes ne consomment PAS
+               * le quota des chaînes normales.
+               *
+               * Ils seront récupérés séparément
+               * dans les catégories adultes.
+               */
+              continue;
+            }
+
+            if (
+              normalChannels.length <
+              liveAccess.tv_channels
+            ) {
+              normalChannels.push(
+                channel,
+              );
+            }
+          }
+
+          offset +=
+            batch.length;
+
+          if (
+            batch.length <
+            DB_BATCH_SIZE
+          ) {
+            break;
+          }
+        }
+
+        /*
+         * ------------------------------------------------------
+         * 2. CHAÎNES ADULTES
+         *
+         * Si l'abonnement autorise l'adulte
+         * ET que la protection locale a été validée,
+         * on récupère TOUTES les chaînes adultes.
+         * ------------------------------------------------------
+         */
+
+        if (
+          liveAccess.adult &&
+          unlockedAdult
+        ) {
+          const adultCategories =
+            dbCategories.filter(
+              category =>
+                isAdultCategory(
+                  category,
+                ),
+            );
+
+          for (
+            const category of adultCategories
+          ) {
+            const categoryChannels =
+              await getAllCategoryChannels(
+                category.id,
+                search,
+              );
+
+            for (
+              const channel of categoryChannels
+            ) {
+              if (
+                adultIds.has(
+                  channel.stream_id,
+                )
+              ) {
+                continue;
+              }
+
+              if (
+                !isAdultChannel(
+                  channel,
+                  adultCategoryIds,
+                )
+              ) {
+                continue;
+              }
+
+              adultIds.add(
+                channel.stream_id,
+              );
+
+              adultChannels.push(
+                channel,
+              );
+            }
+          }
+
+          /*
+           * Certaines bases peuvent avoir une chaîne
+           * marquée adulte mais rangée dans une catégorie
+           * non adulte.
+           *
+           * On la récupère également sans dépasser
+           * le contenu déjà chargé.
+           */
+          let adultScanOffset = 0;
+
+          while (true) {
+            const batch =
+              search
+                ? await searchLiveChannelsFromDatabase(
+                    search,
+                    undefined,
+                    DB_BATCH_SIZE,
+                    adultScanOffset,
+                  )
+                : await getLiveChannelsFromDatabase(
+                    undefined,
+                    DB_BATCH_SIZE,
+                    adultScanOffset,
+                  );
+
+            if (
+              batch.length === 0
+            ) {
+              break;
+            }
+
+            for (
+              const channel of batch
+            ) {
+              if (
+                adultIds.has(
+                  channel.stream_id,
+                )
+              ) {
+                continue;
+              }
+
+              if (
+                isAdultChannel(
+                  channel,
+                  adultCategoryIds,
+                )
+              ) {
+                adultIds.add(
+                  channel.stream_id,
+                );
+
+                adultChannels.push(
+                  channel,
+                );
+              }
+            }
+
+            adultScanOffset +=
+              batch.length;
+
+            if (
+              batch.length <
+              DB_BATCH_SIZE
+            ) {
+              break;
+            }
+          }
+        }
+
+        const finalChannels = [
+          ...normalChannels,
+          ...adultChannels,
+        ];
+
+        console.log(
+          'LISTE LIVE ACCESSIBLE CONSTRUITE :',
         );
 
         console.log(
-          'CATÉGORIES LIVE LUES DEPUIS SQLITE :',
-          formattedCategories.length,
+          'CHAÎNES NORMALES :',
+          normalChannels.length,
         );
-      } catch (error) {
-        console.error(
-          'ERREUR LECTURE CATÉGORIES LIVE SQLITE :',
-          error,
+
+        console.log(
+          'CHAÎNES ADULTES :',
+          adultChannels.length,
         );
-      }
-    }, [
-      access?.adult,
-      filterCategories,
-    ]);
+
+        console.log(
+          'TOTAL FINAL :',
+          finalChannels.length,
+        );
+
+        console.log(
+          'QUOTA NORMAL :',
+          liveAccess.tv_channels,
+        );
+
+        console.log(
+          'ACCÈS ADULTE :',
+          liveAccess.adult,
+        );
+
+        console.log(
+          'ADULTE DÉVERROUILLÉ :',
+          unlockedAdult,
+        );
+
+        return finalChannels;
+      },
+      [
+        getAdultCategoryIds,
+        getAllCategoryChannels,
+        isAdultCategory,
+        isAdultChannel,
+      ],
+    );
 
   /* ============================================================
-     LECTURE DES CHAÎNES DEPUIS SQLITE
+     CHARGEMENT DES CHAÎNES
   ============================================================ */
 
   const loadChannels =
     useCallback(
-      async (categoryId: string) => {
+      async (
+        categoryId: string,
+        overrideAdultUnlocked?: boolean,
+      ) => {
+        if (!access) {
+          return;
+        }
+
+        const unlockedAdult =
+          overrideAdultUnlocked ??
+          adultUnlocked;
+
         try {
           const category =
             categories.find(
@@ -535,8 +947,8 @@ export default function LiveScreen() {
 
           if (
             category &&
-            !access?.adult &&
-            isAdultCategory(category)
+            isAdultCategory(category) &&
+            !access.adult
           ) {
             console.log(
               'ACCÈS CATÉGORIE ADULTE REFUSÉ :',
@@ -546,64 +958,126 @@ export default function LiveScreen() {
             return;
           }
 
-          const dbCategoryId =
-            categoryId === 'all'
-              ? undefined
-              : categoryId;
-
-          const [
-            rows,
-            count,
-          ] = await Promise.all([
-            getLiveChannelsFromDatabase(
-              dbCategoryId,
-              PAGE_SIZE,
-              0,
-            ),
-            getLiveChannelsCount(
-              dbCategoryId,
-            ),
-          ]);
-
-          if (!mountedRef.current) {
+          if (
+            access.tv_channels <= 0
+          ) {
+            setChannels([]);
+            setTotalChannels(0);
             return;
           }
 
-          const limitedRows =
-            applyChannelLimit(
-              rows,
-              0,
+          const dbCategories =
+            categories.filter(
+              categoryItem =>
+                categoryItem.id !==
+                'all',
             );
 
-          const limitedCount =
-            Math.min(
-              count,
-              access?.tv_channels ?? 0,
-            );
+          let result: Channel[] = [];
 
-          setChannels(
-            limitedRows,
-          );
+          /*
+           * ------------------------------------------------------
+           * TOUTES
+           *
+           * 200 normales + toutes les adultes.
+           * ------------------------------------------------------
+           */
 
+          if (
+            categoryId === 'all'
+          ) {
+            result =
+              await getAllAccessibleChannels(
+                dbCategories,
+                access,
+                unlockedAdult,
+              );
+          }
+
+          /*
+           * ------------------------------------------------------
+           * CATÉGORIE ADULTE
+           *
+           * Toutes les chaînes de la catégorie.
+           * Le quota normal ne s'applique PAS.
+           * ------------------------------------------------------
+           */
+
+          else if (
+            category &&
+            isAdultCategory(
+              category,
+            )
+          ) {
+            if (
+              !access.adult ||
+              !unlockedAdult
+            ) {
+              setChannels([]);
+              setTotalChannels(0);
+              return;
+            }
+
+            result =
+              await getAllCategoryChannels(
+                categoryId,
+                '',
+              );
+          }
+
+          /*
+           * ------------------------------------------------------
+           * CATÉGORIE NORMALE
+           *
+           * Le quota de l'abonnement s'applique.
+           * ------------------------------------------------------
+           */
+
+          else {
+            result =
+              await getLiveChannelsFromDatabase(
+                categoryId,
+                access.tv_channels,
+                0,
+              );
+
+            result =
+              result.filter(
+                channel =>
+                  !isAdultChannel(
+                    channel,
+                    getAdultCategoryIds(
+                      dbCategories,
+                    ),
+                  ),
+              ).slice(
+                0,
+                access.tv_channels,
+              );
+          }
+
+          if (
+            !mountedRef.current
+          ) {
+            return;
+          }
+
+          setChannels(result);
           setTotalChannels(
-            limitedCount,
+            result.length,
           );
-
-          currentOffsetRef.current =
-            limitedRows.length;
-
-          lastRequestedOffsetRef.current =
-            null;
 
           console.log(
             'CHAÎNES LIVE LUES DEPUIS SQLITE :',
-            limitedRows.length,
-            '| OFFSET : 0 | LIMIT :',
-            PAGE_SIZE,
-            '| LIMITE ABONNEMENT :',
-            access?.tv_channels ?? 0,
+            result.length,
             '| CATÉGORIE :',
             categoryId,
+            '| QUOTA NORMAL :',
+            access.tv_channels,
+            '| ADULTE :',
+            access.adult,
+            '| ADULTE DÉVERROUILLÉ :',
+            unlockedAdult,
           );
         } catch (error) {
           console.error(
@@ -613,16 +1087,19 @@ export default function LiveScreen() {
         }
       },
       [
-        access?.tv_channels,
-        access?.adult,
-        applyChannelLimit,
+        access,
+        adultUnlocked,
         categories,
+        getAdultCategoryIds,
+        getAllAccessibleChannels,
+        getAllCategoryChannels,
         isAdultCategory,
+        isAdultChannel,
       ],
     );
 
   /* ============================================================
-     RECHERCHE DANS SQLITE
+     RECHERCHE
   ============================================================ */
 
   const searchChannels =
@@ -645,8 +1122,11 @@ export default function LiveScreen() {
 
         if (
           category &&
-          !access?.adult &&
-          isAdultCategory(category)
+          isAdultCategory(category) &&
+          (
+            !access?.adult ||
+            !adultUnlocked
+          )
         ) {
           console.log(
             'RECHERCHE ADULTE BLOQUÉE :',
@@ -685,26 +1165,86 @@ export default function LiveScreen() {
         setSearching(true);
 
         try {
-          const dbCategoryId =
-            categoryId === 'all'
-              ? undefined
-              : categoryId;
+          if (!access) {
+            return;
+          }
 
-          const [
-            rows,
-            count,
-          ] = await Promise.all([
-            searchLiveChannelsFromDatabase(
-              search,
-              dbCategoryId,
-              PAGE_SIZE,
-              0,
-            ),
-            getSearchLiveChannelsCount(
-              search,
-              dbCategoryId,
-            ),
-          ]);
+          const dbCategories =
+            categories.filter(
+              categoryItem =>
+                categoryItem.id !==
+                'all',
+            );
+
+          let result: Channel[] = [];
+
+          /*
+           * TOUTES :
+           * 200 normales + tous les adultes
+           * correspondant à la recherche.
+           */
+          if (
+            categoryId === 'all'
+          ) {
+            result =
+              await getAllAccessibleChannels(
+                dbCategories,
+                access,
+                adultUnlocked,
+                search,
+              );
+          }
+
+          /*
+           * ADULTE :
+           * toutes les chaînes adultes correspondant
+           * à la recherche.
+           */
+          else if (
+            category &&
+            isAdultCategory(
+              category,
+            )
+          ) {
+            result =
+              await getAllCategoryChannels(
+                categoryId,
+                search,
+              );
+          }
+
+          /*
+           * NORMALE :
+           * maximum quota de l'abonnement.
+           */
+          else {
+            result =
+              await searchLiveChannelsFromDatabase(
+                search,
+                categoryId,
+                access.tv_channels,
+                0,
+              );
+
+            const adultCategoryIds =
+              getAdultCategoryIds(
+                dbCategories,
+              );
+
+            result =
+              result
+                .filter(
+                  channel =>
+                    !isAdultChannel(
+                      channel,
+                      adultCategoryIds,
+                    ),
+                )
+                .slice(
+                  0,
+                  access.tv_channels,
+                );
+          }
 
           if (
             !mountedRef.current ||
@@ -714,41 +1254,22 @@ export default function LiveScreen() {
             return;
           }
 
-          const limitedRows =
-            applyChannelLimit(
-              rows,
-              0,
-            );
-
-          const limitedCount =
-            Math.min(
-              count,
-              access?.tv_channels ?? 0,
-            );
-
-          setChannels(
-            limitedRows,
-          );
-
+          setChannels(result);
           setTotalChannels(
-            limitedCount,
+            result.length,
           );
-
-          currentOffsetRef.current =
-            limitedRows.length;
-
-          lastRequestedOffsetRef.current =
-            null;
 
           console.log(
             'RECHERCHE LIVE SQLITE :',
             search,
             '| RÉSULTATS :',
-            limitedCount,
-            '| LIMITE ABONNEMENT :',
-            access?.tv_channels ?? 0,
-            '| CATÉGORIE :',
-            categoryId,
+            result.length,
+            '| QUOTA NORMAL :',
+            access.tv_channels,
+            '| ADULTE :',
+            access.adult,
+            '| DÉVERROUILLÉ :',
+            adultUnlocked,
           );
         } catch (error) {
           console.error(
@@ -766,208 +1287,41 @@ export default function LiveScreen() {
         }
       },
       [
-        access?.adult,
-        access?.tv_channels,
-        applyChannelLimit,
+        access,
+        adultUnlocked,
         categories,
+        getAdultCategoryIds,
+        getAllAccessibleChannels,
+        getAllCategoryChannels,
         isAdultCategory,
+        isAdultChannel,
         loadChannels,
       ],
     );
 
   /* ============================================================
-     PAGINATION
-  ============================================================ */
-
-  const loadMoreChannels =
-    useCallback(async () => {
-      if (loadingMoreRef.current) {
-        return;
-      }
-
-      if (
-        channels.length >=
-        totalChannels
-      ) {
-        return;
-      }
-
-      const accessLimit =
-        access?.tv_channels ?? 0;
-
-      if (
-        currentOffsetRef.current >=
-        accessLimit
-      ) {
-        return;
-      }
-
-      const category =
-        categories.find(
-          item =>
-            item.id === activeCategory,
-        );
-
-      if (
-        category &&
-        !access?.adult &&
-        isAdultCategory(category)
-      ) {
-        console.log(
-          'PAGINATION ADULTE BLOQUÉE :',
-          category.name,
-        );
-
-        return;
-      }
-
-      const offset =
-        currentOffsetRef.current;
-
-      if (
-        lastRequestedOffsetRef.current ===
-        offset
-      ) {
-        return;
-      }
-
-      loadingMoreRef.current =
-        true;
-
-      lastRequestedOffsetRef.current =
-        offset;
-
-      setLoadingMore(true);
-
-      try {
-        const dbCategoryId =
-          activeCategory === 'all'
-            ? undefined
-            : activeCategory;
-
-        const search =
-          searchText.trim();
-
-        const remaining =
-          Math.min(
-            PAGE_SIZE,
-            accessLimit - offset,
-          );
-
-        if (remaining <= 0) {
-          return;
-        }
-
-        const nextChannels =
-          search
-            ? await searchLiveChannelsFromDatabase(
-                search,
-                dbCategoryId,
-                remaining,
-                offset,
-              )
-            : await getLiveChannelsFromDatabase(
-                dbCategoryId,
-                remaining,
-                offset,
-              );
-
-        if (!mountedRef.current) {
-          return;
-        }
-
-        const limitedNextChannels =
-          applyChannelLimit(
-            nextChannels,
-            offset,
-          );
-
-        if (
-          limitedNextChannels.length > 0
-        ) {
-          setChannels(previous => {
-            const existingIds =
-              new Set(
-                previous.map(
-                  channel =>
-                    channel.stream_id,
-                ),
-              );
-
-            const uniqueChannels =
-              limitedNextChannels.filter(
-                channel =>
-                  !existingIds.has(
-                    channel.stream_id,
-                  ),
-              );
-
-            return [
-              ...previous,
-              ...uniqueChannels,
-            ];
-          });
-
-          currentOffsetRef.current +=
-            limitedNextChannels.length;
-
-          console.log(
-            'CHAÎNES LIVE AJOUTÉES :',
-            limitedNextChannels.length,
-            '| OFFSET :',
-            offset,
-            '| LIMITE :',
-            accessLimit,
-          );
-        }
-      } catch (error) {
-        console.error(
-          'ERREUR PAGINATION CHAÎNES LIVE :',
-          error,
-        );
-
-        lastRequestedOffsetRef.current =
-          null;
-      } finally {
-        if (mountedRef.current) {
-          loadingMoreRef.current =
-            false;
-
-          setLoadingMore(false);
-        }
-      }
-    }, [
-      access?.adult,
-      access?.tv_channels,
-      activeCategory,
-      applyChannelLimit,
-      categories,
-      channels.length,
-      isAdultCategory,
-      searchText,
-      totalChannels,
-    ]);
-
-  /* ============================================================
      INITIALISATION
-
-     1. Vérification abonnement
-     2. Affichage immédiat de SQLite
-     3. Comparaison serveur / SQLite
-     4. Synchronisation uniquement si nécessaire
-  ============================================================ */
+============================================================ */
 
   useEffect(() => {
     mountedRef.current = true;
 
+    if (initializedRef.current) {
+      return;
+    }
+
+    initializedRef.current = true;
+
     const initialize =
       async () => {
         try {
-          /* ----------------------------------------------------
-             VÉRIFICATION ACCÈS UTILISATEUR
-          ---------------------------------------------------- */
+          /*
+           * ------------------------------------------------------
+           * 1. ACCÈS
+           * ------------------------------------------------------
+           */
 
-          const hasAccess =
+          const accessResult =
             await loadUserAccess();
 
           if (
@@ -976,19 +1330,23 @@ export default function LiveScreen() {
             return;
           }
 
-          if (!hasAccess) {
+          if (!accessResult) {
             setLoading(false);
-
             return;
           }
 
-          /* ----------------------------------------------------
-             VÉRIFICATION LIMITE LIVE
-          ---------------------------------------------------- */
+          const {
+            liveAccess,
+          } = accessResult;
+
+          /*
+           * ------------------------------------------------------
+           * 2. AUCUNE CHAÎNE AUTORISÉE
+           * ------------------------------------------------------
+           */
 
           if (
-            (access?.tv_channels ?? 0) <=
-            0
+            liveAccess.tv_channels <= 0
           ) {
             console.log(
               'AUCUNE CHAÎNE AUTORISÉE PAR L’ABONNEMENT',
@@ -1004,30 +1362,59 @@ export default function LiveScreen() {
             setChannels([]);
             setTotalChannels(0);
             setLoading(false);
+            initialLoadDoneRef.current =
+              true;
 
             return;
           }
 
-          /* ----------------------------------------------------
-             AFFICHAGE IMMÉDIAT DE SQLITE
-          ---------------------------------------------------- */
+          /*
+           * ------------------------------------------------------
+           * 3. CATÉGORIES SQLITE
+           * ------------------------------------------------------
+           */
 
           const dbCategories =
             await getLiveCategoriesFromDatabase();
 
-          const [
-            dbChannels,
-            dbCount,
-          ] = await Promise.all([
-            getLiveChannelsFromDatabase(
-              undefined,
-              PAGE_SIZE,
-              0,
-            ),
-            getLiveChannelsCount(
-              undefined,
-            ),
-          ]);
+          const formattedCategories =
+            filterCategories(
+              dbCategories,
+              liveAccess.adult,
+            );
+
+          /*
+           * ------------------------------------------------------
+           * 4. AFFICHAGE SQLITE IMMÉDIAT
+           *
+           * Important :
+           * on utilise liveAccess directement,
+           * pas le state access.
+           * ------------------------------------------------------
+           */
+
+          let initialChannels: Channel[] =
+            [];
+
+          const categoryObjects =
+            dbCategories.map(
+              (row: any) => ({
+                id: String(
+                  row.category_id,
+                ),
+                name: String(
+                  row.category_name ??
+                    '',
+                ),
+              }),
+            );
+
+          initialChannels =
+            await getAllAccessibleChannels(
+              categoryObjects,
+              liveAccess,
+              false,
+            );
 
           if (
             !mountedRef.current
@@ -1035,38 +1422,17 @@ export default function LiveScreen() {
             return;
           }
 
-          const formattedCategories =
-            filterCategories(
-              dbCategories,
-              access?.adult ?? false,
-            );
-
-          const limitedDbChannels =
-            applyChannelLimit(
-              dbChannels,
-              0,
-            );
-
-          const limitedDbCount =
-            Math.min(
-              dbCount,
-              access?.tv_channels ?? 0,
-            );
-
           setCategories(
             formattedCategories,
           );
 
           setChannels(
-            limitedDbChannels,
+            initialChannels,
           );
 
           setTotalChannels(
-            limitedDbCount,
+            initialChannels.length,
           );
-
-          currentOffsetRef.current =
-            limitedDbChannels.length;
 
           initialLoadDoneRef.current =
             true;
@@ -1085,18 +1451,18 @@ export default function LiveScreen() {
           );
 
           console.log(
-            'CHAÎNES :',
-            limitedDbChannels.length,
+            'CHAÎNES NORMALES AFFICHÉES :',
+            initialChannels.length,
           );
 
           console.log(
             'LIMITE ABONNEMENT :',
-            access?.tv_channels ?? 0,
+            liveAccess.tv_channels,
           );
 
           console.log(
             'ACCÈS ADULTE :',
-            access?.adult ?? false,
+            liveAccess.adult,
           );
 
           console.log(
@@ -1105,9 +1471,11 @@ export default function LiveScreen() {
 
           setLoading(false);
 
-          /* ----------------------------------------------------
-             VÉRIFICATION SERVEUR / SQLITE
-          ---------------------------------------------------- */
+          /*
+           * ------------------------------------------------------
+           * 5. SMART SYNC EN ARRIÈRE-PLAN
+           * ------------------------------------------------------
+           */
 
           const result =
             await syncLiveTVIfNeeded(
@@ -1137,14 +1505,17 @@ export default function LiveScreen() {
             result,
           );
 
-          /* ----------------------------------------------------
-             UNE SYNCHRONISATION A EU LIEU
-          ---------------------------------------------------- */
+          /*
+           * ------------------------------------------------------
+           * 6. APRÈS SYNCHRONISATION
+           * ------------------------------------------------------
+           */
 
           if (
             result.synchronized
           ) {
-            await loadCategories();
+            const refreshedCategories =
+              await getLiveCategoriesFromDatabase();
 
             if (
               !mountedRef.current
@@ -1152,27 +1523,56 @@ export default function LiveScreen() {
               return;
             }
 
-            const currentSearch =
-              searchTextRef.current.trim();
+            const formatted =
+              filterCategories(
+                refreshedCategories,
+                liveAccess.adult,
+              );
 
-            if (currentSearch) {
-              await searchChannels(
-                currentSearch,
-                activeCategoryRef.current,
+            setCategories(
+              formatted,
+            );
+
+            const categoryObjects =
+              refreshedCategories.map(
+                (row: any) => ({
+                  id: String(
+                    row.category_id,
+                  ),
+                  name: String(
+                    row.category_name ??
+                      '',
+                  ),
+                }),
               );
-            } else {
-              await loadChannels(
-                activeCategoryRef.current,
+
+            const refreshedChannels =
+              await getAllAccessibleChannels(
+                categoryObjects,
+                liveAccess,
+                adultUnlocked,
+                searchTextRef.current.trim(),
               );
+
+            if (
+              !mountedRef.current
+            ) {
+              return;
             }
+
+            setChannels(
+              refreshedChannels,
+            );
+
+            setTotalChannels(
+              refreshedChannels.length,
+            );
+
+            console.log(
+              'LIVE TV RECHARGÉ APRÈS SYNCHRONISATION :',
+              refreshedChannels.length,
+            );
           } else {
-            /* --------------------------------------------------
-               AUCUNE SYNCHRONISATION
-
-               Les logos ont été mis à jour
-               dans le cache.
-            -------------------------------------------------- */
-
             console.log(
               'LIVE TV DÉJÀ À JOUR — AUCUN UPSERT',
             );
@@ -1201,7 +1601,6 @@ export default function LiveScreen() {
           }
 
           setLoading(false);
-
           setSyncing(false);
         }
       };
@@ -1212,18 +1611,49 @@ export default function LiveScreen() {
       mountedRef.current = false;
     };
   }, [
-    access?.adult,
-    access?.tv_channels,
-    applyChannelLimit,
     filterCategories,
-    loadCategories,
-    loadChannels,
+    getAllAccessibleChannels,
     loadUserAccess,
+  ]);
+
+  /* ============================================================
+     RECHARGER APRÈS DÉVERROUILLAGE ADULTE
+  ============================================================ */
+
+  useEffect(() => {
+    if (
+      !adultUnlocked ||
+      !initialLoadDoneRef.current
+    ) {
+      return;
+    }
+
+    const reloadAfterAdultUnlock =
+      async () => {
+        if (
+          searchTextRef.current.trim()
+        ) {
+          await searchChannels(
+            searchTextRef.current,
+            activeCategoryRef.current,
+          );
+        } else {
+          await loadChannels(
+            activeCategoryRef.current,
+            true,
+          );
+        }
+      };
+
+    reloadAfterAdultUnlock();
+  }, [
+    adultUnlocked,
+    loadChannels,
     searchChannels,
   ]);
 
   /* ============================================================
-     EFFET DE RECHERCHE AVEC DÉLAI DE 300 MS
+     RECHERCHE AVEC DÉLAI 300 MS
   ============================================================ */
 
   useEffect(() => {
@@ -1251,7 +1681,7 @@ export default function LiveScreen() {
   ]);
 
   /* ============================================================
-     OUVERTURE DE LA CATÉGORIE ADULTE
+     OUVERTURE CATÉGORIE ADULTE
   ============================================================ */
 
   const requestAdultCategoryAccess =
@@ -1263,13 +1693,6 @@ export default function LiveScreen() {
           '🔐 CLIC CATÉGORIE ADULTE :',
           category.name,
         );
-
-        /*
-         * IMPORTANT :
-         * Si l'abonnement n'autorise pas
-         * l'adulte, la catégorie est totalement
-         * inaccessible.
-         */
 
         if (!access?.adult) {
           console.log(
@@ -1283,21 +1706,33 @@ export default function LiveScreen() {
           const protection =
             await getLocalProtection();
 
-          /* --------------------------------------------------
-             AUCUNE PROTECTION CONFIGURÉE
-          -------------------------------------------------- */
+          /*
+           * ------------------------------------------------------
+           * AUCUNE PROTECTION CONFIGURÉE
+           *
+           * Utilisation du DialogProvider,
+           * et non Alert.alert.
+           * ------------------------------------------------------
+           */
 
           if (!protection) {
-            Alert.alert(
-              'Catégorie protégée',
-              'La catégorie Adulte nécessite un mot de passe local. Configure d’abord une protection dans Paramètres → Sécurité.',
-              [
+            showDialog({
+              title:
+                'Catégorie protégée',
+              message:
+                'La catégorie Adulte nécessite un mot de passe local. Configure d’abord une protection dans Paramètres → Sécurité.',
+              icon: '🔒',
+              buttons: [
                 {
-                  text: 'Annuler',
-                  style: 'cancel',
+                  label: 'Annuler',
+                  variant:
+                    'secondary',
                 },
                 {
-                  text: 'Configurer maintenant',
+                  label:
+                    'Configurer maintenant',
+                  variant:
+                    'primary',
                   onPress: () => {
                     router.push(
                       '/security',
@@ -1305,25 +1740,23 @@ export default function LiveScreen() {
                   },
                 },
               ],
-            );
+            });
 
             return;
           }
 
-          /* --------------------------------------------------
-             PROTECTION CONFIGURÉE
-
-             On ouvre la fenêtre de mot de passe.
-          -------------------------------------------------- */
+          /*
+           * ------------------------------------------------------
+           * PROTECTION CONFIGURÉE
+           * ------------------------------------------------------
+           */
 
           setPendingAdultCategory(
             category,
           );
 
           setAdultPassword('');
-
           setAdultPasswordError('');
-
           setShowAdultPassword(false);
 
           setAdultPasswordModalVisible(
@@ -1335,17 +1768,29 @@ export default function LiveScreen() {
             error,
           );
 
-          Alert.alert(
-            'Erreur',
-            'Impossible de vérifier la protection de la catégorie Adulte.',
-          );
+          showDialog({
+            title: 'Erreur',
+            message:
+              'Impossible de vérifier la protection de la catégorie Adulte.',
+            icon: '⚠️',
+            buttons: [
+              {
+                label: 'Fermer',
+                variant:
+                  'secondary',
+              },
+            ],
+          });
         }
       },
-      [access?.adult],
+      [
+        access?.adult,
+        showDialog,
+      ],
     );
 
   /* ============================================================
-     VALIDATION DU MOT DE PASSE ADULTE
+     VALIDATION MOT DE PASSE ADULTE
   ============================================================ */
 
   const handleAdultPasswordSubmit =
@@ -1356,22 +1801,13 @@ export default function LiveScreen() {
         return;
       }
 
-      /*
-       * Double sécurité :
-       * même si la modale était déjà ouverte,
-       * on revalide le droit adulte.
-       */
-
       if (!access?.adult) {
         setAdultPasswordModalVisible(
           false,
         );
 
         setAdultPassword('');
-
-        setPendingAdultCategory(
-          null,
-        );
+        setPendingAdultCategory(null);
 
         console.log(
           '🔒 VALIDATION ADULTE REFUSÉE : ABONNEMENT SANS ACCÈS ADULTE',
@@ -1404,19 +1840,13 @@ export default function LiveScreen() {
           );
 
           setAdultPassword('');
-
           return;
         }
-
-        /* --------------------------------------------------
-           MOT DE PASSE CORRECT
-        -------------------------------------------------- */
 
         const category =
           pendingAdultCategory;
 
         setAdultPassword('');
-
         setAdultPasswordError('');
 
         setAdultPasswordModalVisible(
@@ -1430,6 +1860,12 @@ export default function LiveScreen() {
         if (!category) {
           return;
         }
+
+        /*
+         * Le mot de passe local est maintenant
+         * validé pour cette session Live.
+         */
+        setAdultUnlocked(true);
 
         activeCategoryRef.current =
           category.id;
@@ -1463,7 +1899,7 @@ export default function LiveScreen() {
     ]);
 
   /* ============================================================
-     FERMETURE DE LA FENÊTRE ADULTE
+     FERMETURE MODALE ADULTE
   ============================================================ */
 
   const closeAdultPasswordModal =
@@ -1479,13 +1915,11 @@ export default function LiveScreen() {
       );
 
       setAdultPassword('');
-
       setAdultPasswordError('');
-
-      setPendingAdultCategory(
-        null,
-      );
-    }, [checkingAdultPassword]);
+      setPendingAdultCategory(null);
+    }, [
+      checkingAdultPassword,
+    ]);
 
   /* ============================================================
      CHANGEMENT DE CATÉGORIE
@@ -1512,20 +1946,15 @@ export default function LiveScreen() {
           return;
         }
 
-        /* --------------------------------------------------
-           CATÉGORIE ADULTE
-        -------------------------------------------------- */
+        /*
+         * ------------------------------------------------------
+         * CATÉGORIE ADULTE
+         * ------------------------------------------------------
+         */
 
         if (
           isAdultCategory(category)
         ) {
-          /*
-           * Si adult === false :
-           * la catégorie ne devrait même pas
-           * être présente, mais cette vérification
-           * empêche également un accès forcé.
-           */
-
           if (!access?.adult) {
             console.log(
               '🔒 CATÉGORIE ADULTE BLOQUÉE : ABONNEMENT SANS ACCÈS',
@@ -1541,9 +1970,11 @@ export default function LiveScreen() {
           return;
         }
 
-        /* --------------------------------------------------
-           CATÉGORIE NORMALE
-        -------------------------------------------------- */
+        /*
+         * ------------------------------------------------------
+         * CATÉGORIE NORMALE
+         * ------------------------------------------------------
+         */
 
         activeCategoryRef.current =
           categoryId;
@@ -1562,27 +1993,31 @@ export default function LiveScreen() {
     );
 
   /* ============================================================
-     OUVERTURE DU LECTEUR
+     OUVERTURE LECTEUR
   ============================================================ */
 
   const handleChannelPress =
     useCallback(
       (channel: Channel) => {
-        /*
-         * Sans configuration Xtream provenant
-         * du serveur, on ne tente pas de lancer
-         * le flux.
-         */
-
         if (!xtreamAccess) {
           console.error(
             'CONFIGURATION XTREAM UTILISATEUR INDISPONIBLE',
           );
 
-          Alert.alert(
-            'Lecture impossible',
-            'La configuration du serveur de streaming est indisponible.',
-          );
+          showDialog({
+            title:
+              'Lecture impossible',
+            message:
+              'La configuration du serveur de streaming est indisponible.',
+            icon: '⚠️',
+            buttons: [
+              {
+                label: 'Fermer',
+                variant:
+                  'secondary',
+              },
+            ],
+          });
 
           return;
         }
@@ -1631,12 +2066,13 @@ export default function LiveScreen() {
       },
       [
         channels,
+        showDialog,
         xtreamAccess,
       ],
     );
 
   /* ============================================================
-     RENDU DES CHAÎNES
+     RENDU CHAÎNE
   ============================================================ */
 
   const renderChannel =
@@ -1670,34 +2106,6 @@ export default function LiveScreen() {
         ),
       [],
     );
-
-  const renderFooter =
-    useCallback(() => {
-      if (!loadingMore) {
-        return null;
-      }
-
-      return (
-        <View
-          style={
-            styles.loadingMore
-          }
-        >
-          <ActivityIndicator
-            size="small"
-            color="#E50914"
-          />
-
-          <Text
-            style={
-              styles.loadingMoreText
-            }
-          >
-            Chargement...
-          </Text>
-        </View>
-      );
-    }, [loadingMore]);
 
   /* ============================================================
      AFFICHAGE
@@ -1792,6 +2200,10 @@ export default function LiveScreen() {
     <View
       style={styles.container}
     >
+      {/* ======================================================
+         HEADER
+      ====================================================== */}
+
       <View
         style={styles.header}
       >
@@ -1833,6 +2245,10 @@ export default function LiveScreen() {
           </Text>
         </View>
       </View>
+
+      {/* ======================================================
+         RECHERCHE
+      ====================================================== */}
 
       <View
         style={
@@ -1883,6 +2299,10 @@ export default function LiveScreen() {
             </Pressable>
           )}
       </View>
+
+      {/* ======================================================
+         SYNCHRONISATION
+      ====================================================== */}
 
       {syncing &&
         syncProgress.phase !==
@@ -1979,6 +2399,10 @@ export default function LiveScreen() {
           </View>
         )}
 
+      {/* ======================================================
+         CATÉGORIES
+      ====================================================== */}
+
       <View
         style={
           styles.categorySection
@@ -2032,100 +2456,58 @@ export default function LiveScreen() {
         />
       </View>
 
-      {channels.length ===
-      0 ? (
-        <View
-          style={
-            styles.emptyContainer
-          }
-        >
-          <Text
-            style={styles.emptyIcon}
-          >
+      {/* ======================================================
+         CHAÎNES
+      ====================================================== */}
+      
+      {channels.length === 0 ? (
+        <View style={styles.emptyContainer}>
+          <Text style={styles.emptyIcon}>
             📺
           </Text>
 
-          <Text
-            style={
-              styles.emptyTitle
-            }
-          >
+          <Text style={styles.emptyTitle}>
             Aucune chaîne disponible
           </Text>
 
           {syncing && (
-            <Text
-              style={
-                styles.emptyText
-              }
-            >
-              Synchronisation des
-              chaînes...
+            <Text style={styles.emptyText}>
+              Synchronisation des chaînes...
             </Text>
           )}
         </View>
       ) : (
         <FlatList
           data={channels}
-          extraData={
-            iconCacheVersion
-          }
-          keyExtractor={
-            keyExtractor
-          }
-          renderItem={
-            renderChannel
-          }
+          extraData={iconCacheVersion}
+          keyExtractor={keyExtractor}
+          renderItem={renderChannel}
           numColumns={3}
-          contentContainerStyle={
-            styles.channelsList
-          }
-          columnWrapperStyle={
-            styles.columnWrapper
-          }
-          onEndReached={
-            loadMoreChannels
-          }
-          onEndReachedThreshold={0.5}
-          ListFooterComponent={
-            renderFooter
-          }
+          contentContainerStyle={styles.channelsList}
+          columnWrapperStyle={styles.columnWrapper}
           initialNumToRender={20}
           maxToRenderPerBatch={20}
           windowSize={7}
-          removeClippedSubviews={
-            true
-          }
-          showsVerticalScrollIndicator={
-            false
-          }
+          removeClippedSubviews={true}
+          showsVerticalScrollIndicator={false}
         />
       )}
 
-      {/* ========================================================
+      {/* ======================================================
          MODALE MOT DE PASSE ADULTE
-      ======================================================== */}
+      ====================================================== */
+      }
 
       <Modal
-        visible={
-          adultPasswordModalVisible
-        }
+        visible={adultPasswordModalVisible}
         transparent
         animationType="fade"
         onRequestClose={
           closeAdultPasswordModal
         }
       >
-        <View
-          style={
-            styles.modalOverlay
-          }
-        >
-          <View
-            style={
-              styles.passwordModal
-            }
-          >
+        <View style={styles.modalOverlay}>
+          <View style={styles.passwordModal}>
             <View
               style={
                 styles.passwordModalIcon
@@ -2164,24 +2546,14 @@ export default function LiveScreen() {
               }
             >
               <TextInput
-                value={
-                  adultPassword
-                }
-                onChangeText={
-                  value => {
-                    setAdultPassword(
-                      value,
-                    );
+                value={adultPassword}
+                onChangeText={value => {
+                  setAdultPassword(value);
 
-                    if (
-                      adultPasswordError
-                    ) {
-                      setAdultPasswordError(
-                        '',
-                      );
-                    }
+                  if (adultPasswordError) {
+                    setAdultPasswordError('');
                   }
-                }
+                }}
                 placeholder="Mot de passe"
                 placeholderTextColor="#555555"
                 secureTextEntry={
@@ -2207,8 +2579,7 @@ export default function LiveScreen() {
                 }
                 onPress={() =>
                   setShowAdultPassword(
-                    value =>
-                      !value,
+                    value => !value,
                   )
                 }
                 disabled={
@@ -2306,6 +2677,8 @@ export default function LiveScreen() {
     </View>
   );
 }
+
+
 
 /* ============================================================
    STYLES
@@ -2509,19 +2882,6 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 14,
     fontWeight: '800',
-  },
-
-  loadingMore: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 20,
-  },
-
-  loadingMoreText: {
-    color: '#777777',
-    fontSize: 12,
-    marginLeft: 8,
   },
 
   syncContainer: {

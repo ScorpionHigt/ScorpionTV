@@ -229,8 +229,7 @@ export async function syncSeriesCategories(
   let allowAdult = adultAccess;
 
   if (!xtreamClient) {
-    const access =
-      await getSeriesXtreamClient();
+    const access = await getSeriesXtreamClient();
 
     xtreamClient = access.client;
     allowAdult = access.adultAccess;
@@ -243,13 +242,12 @@ export async function syncSeriesCategories(
   const remoteCategories =
     await xtreamClient.getSeriesCategories();
 
-  const categories =
-    allowAdult
-      ? remoteCategories
-      : remoteCategories.filter(
-          (category) =>
-            !isAdultSeriesCategory(category)
-        );
+  const categories = allowAdult
+    ? remoteCategories
+    : remoteCategories.filter(
+        (category) =>
+          !isAdultSeriesCategory(category)
+      );
 
   console.log(
     'CATÉGORIES SERIES RÉCUPÉRÉES :',
@@ -261,47 +259,69 @@ export async function syncSeriesCategories(
     categories.length
   );
 
-  const allowedCategoryIds =
-    new Set(
-      categories.map(
-        (category) =>
-          category.category_id
-      )
-    );
+  const allowedCategoryIds = new Set(
+    categories.map(
+      (category) => category.category_id
+    )
+  );
 
   let deleted = 0;
 
   await db.withTransactionAsync(async () => {
     /*
-    ----------------------------------------------------------
-    | UPSERT CATÉGORIES
-    ----------------------------------------------------------
+    ========================================================
+    AJOUT / MISE À JOUR DES CATÉGORIES
+    ========================================================
     */
 
     for (const category of categories) {
-      await db.runAsync(
-        `
-        INSERT INTO series_categories (
-          category_id,
-          category_name,
-          parent_id
-        )
-        VALUES (?, ?, ?)
-        ON CONFLICT(category_id)
-        DO UPDATE SET
-          category_name = excluded.category_name,
-          parent_id = excluded.parent_id;
-        `,
-        category.category_id,
-        category.category_name,
-        category.parent_id ?? 0
-      );
+      const existing =
+        await db.getFirstAsync<{
+          category_id: string;
+        }>(
+          `
+          SELECT category_id
+          FROM series_categories
+          WHERE category_id = ?
+          LIMIT 1;
+          `,
+          category.category_id
+        );
+
+      if (existing) {
+        await db.runAsync(
+          `
+          UPDATE series_categories
+          SET
+            category_name = ?,
+            parent_id = ?
+          WHERE category_id = ?;
+          `,
+          category.category_name,
+          category.parent_id ?? 0,
+          category.category_id
+        );
+      } else {
+        await db.runAsync(
+          `
+          INSERT INTO series_categories (
+            category_id,
+            category_name,
+            parent_id
+          )
+          VALUES (?, ?, ?);
+          `,
+          category.category_id,
+          category.category_name,
+          category.parent_id ?? 0
+        );
+      }
     }
 
     /*
-    ----------------------------------------------------------
-    | SUPPRESSION CATÉGORIES DISPARUES / ADULTES
-    ----------------------------------------------------------
+    ========================================================
+    SUPPRESSION DES CATÉGORIES DISPARUES / NON AUTORISÉES
+    ========================================================
     */
 
     const localCategories =
@@ -320,17 +340,24 @@ export async function syncSeriesCategories(
           localCategory.category_id
         )
       ) {
+        /*
+        Supprimer d'abord les séries
+        appartenant à cette catégorie.
+        */
         await db.runAsync(
           `
-          DELETE FROM series_categories
+          DELETE FROM series
           WHERE category_id = ?;
           `,
           localCategory.category_id
         );
 
+        /*
+        Puis supprimer la catégorie.
+        */
         await db.runAsync(
           `
-          DELETE FROM series
+          DELETE FROM series_categories
           WHERE category_id = ?;
           `,
           localCategory.category_id
@@ -405,7 +432,7 @@ export async function syncSeries(
         series_id,
         name,
         plot,
-        cast,
+        "cast",
         director,
         genre,
         release_date,
@@ -507,9 +534,7 @@ export async function syncSeries(
       }
 
       const remoteSignature =
-        getSeriesSignature(
-          series
-        );
+        getSeriesSignature(series);
 
       const localSignature =
         getSeriesSignature(
@@ -606,7 +631,8 @@ export async function syncSeries(
         ? JSON.stringify(
             series.backdrop_path
           )
-        : null;
+        : series.backdrop_path ??
+          null;
 
     /*
     --------------------------------------------------------
@@ -621,7 +647,7 @@ export async function syncSeries(
           series_id,
           name,
           plot,
-          cast,
+          "cast",
           director,
           genre,
           release_date,
@@ -660,20 +686,12 @@ export async function syncSeries(
       */
 
       const remoteSignature =
-        getSeriesSignature(
-          series
-        );
+        getSeriesSignature(series);
 
       const localSignature =
         getSeriesSignature(
           localSeriesItem
         );
-
-      /*
-      ------------------------------------------------------
-      | AUCUNE MODIFICATION
-      ------------------------------------------------------
-      */
 
       if (
         remoteSignature ===
@@ -681,19 +699,13 @@ export async function syncSeries(
       ) {
         unchanged++;
       } else {
-        /*
-        ----------------------------------------------------
-        | SÉRIE MODIFIÉE
-        ----------------------------------------------------
-        */
-
         await db.runAsync(
           `
           UPDATE series
           SET
             name = ?,
             plot = ?,
-            cast = ?,
+            "cast" = ?,
             director = ?,
             genre = ?,
             release_date = ?,
@@ -988,7 +1000,7 @@ export async function getSeriesFromDatabase(
         series_id,
         name,
         plot,
-        cast,
+        "cast",
         director,
         genre,
         release_date,
@@ -1019,7 +1031,7 @@ export async function getSeriesFromDatabase(
       series_id,
       name,
       plot,
-      cast,
+      "cast",
       director,
       genre,
       release_date,
@@ -1065,7 +1077,7 @@ export async function searchSeriesFromDatabase(
         series_id,
         name,
         plot,
-        cast,
+        "cast",
         director,
         genre,
         release_date,
@@ -1094,7 +1106,7 @@ export async function searchSeriesFromDatabase(
       series_id,
       name,
       plot,
-      cast,
+      "cast",
       director,
       genre,
       release_date,
@@ -1165,9 +1177,9 @@ export async function getSearchSeriesCountFromDatabase(
       searchTerm
     );
 
-  return Number(
-    result?.count ?? 0
-  );
+    return Number(
+      result?.count ?? 0
+    );
 }
 
 /*

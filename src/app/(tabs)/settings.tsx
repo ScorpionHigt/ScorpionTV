@@ -3,6 +3,12 @@ import { useEffect, useState } from 'react';
 import { clearLocalProtection } from '../../storage/localProtectionStorage';
 import { router } from 'expo-router';
 import {
+  getAuthUser,
+  AuthUser,
+} from '../../storage/authStorage';
+
+import { logout } from '../../api/authApi';
+import {
   APP_NAME,
   APP_VERSION,
   APP_YEAR,
@@ -198,27 +204,49 @@ export default function SettingsScreen() {
     });
   };
 
-  const handleLogout = () => {
-    showDialog({
-      title: 'Déconnexion',
-      message:
-        'Voulez-vous vraiment vous déconnecter ?',
-      icon: '🚪',
-      buttons: [
-        {
-          label: 'Annuler',
-          variant: 'secondary',
+ 
+const handleLogout = () => {
+  showDialog({
+    title: 'Déconnexion',
+    message:
+      'Voulez-vous vraiment vous déconnecter ?',
+    icon: '🚪',
+    buttons: [
+      {
+        label: 'Annuler',
+        variant: 'secondary',
+      },
+      {
+        label: 'Se déconnecter',
+        variant: 'danger',
+        onPress: async () => {
+          try {
+            console.log(
+              'DÉCONNEXION DEMANDÉE',
+            );
+
+            await logout();
+
+            console.log(
+              'DÉCONNEXION SERVEUR TERMINÉE',
+            );
+
+            router.replace('/login');
+          } catch (error) {
+            console.error(
+              'ERREUR DÉCONNEXION :',
+              error,
+            );
+
+            // Même en cas d'erreur réseau,
+            // on retourne vers l'écran de connexion.
+            router.replace('/login');
+          }
         },
-        {
-          label: 'Se déconnecter',
-          variant: 'danger',
-          onPress: () => {
-            console.log('Déconnexion demandée');
-          },
-        },
-      ],
-    });
-  };
+      },
+    ],
+  });
+};
 
   const handleVideoQuality = () => {
     showDialog({
@@ -233,7 +261,8 @@ export default function SettingsScreen() {
     showDialog({
       title: APP_NAME,
       message:
-        `${APP_NAME} • v${APP_VERSION} © ${APP_YEAR}\n\n` +
+        `${APP_NAME} • v${APP_VERSION} © ${APP_YEAR}
+        PlumaSoft inc\n\n` +
         'Votre plateforme de télévision, films et séries.',
       icon: 'ℹ️',
     });
@@ -500,6 +529,30 @@ export default function SettingsScreen() {
               ›
             </Text>
           </Pressable>
+
+          
+          <Pressable
+            style={styles.settingRow}
+            onPress={handleLogout}
+          >
+            <View style={styles.settingIcon}>
+              <Text>♾️</Text>
+            </View>
+
+            <View style={styles.settingContent}>
+              <Text style={styles.logoutTitle}>
+                Restorer les valeurs d'usine
+              </Text>
+
+              <Text style={styles.settingDescription}>
+                cela supprime toutes vos données ScorpionTV
+              </Text>
+            </View>
+
+            <Text style={styles.arrow}>
+              ›
+            </Text>
+          </Pressable>
         </View>
 
         <Text style={styles.category}>
@@ -532,12 +585,10 @@ export default function SettingsScreen() {
         </View>
 
         <Text style={styles.version}>
-          {APP_NAME} • v{APP_VERSION} © {APP_YEAR}
+          {APP_NAME} • v{APP_VERSION} © {APP_YEAR}  PlumaSoft inc
         </Text>
 
-        <Text style={styles.copyright}>
-          © 2026 PlumaSoft inc
-        </Text>
+       
       </ScrollView>
     </SafeAreaView>
   );

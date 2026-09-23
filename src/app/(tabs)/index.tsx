@@ -30,6 +30,10 @@ import {
   clearAuthSession,
 } from '../../storage/authStorage';
 
+import {
+  needsInitialCatalogSync,
+} from '../../services/initialCatalogSync';
+
 export default function HomeScreen() {
   const { showDialog } = useDialog();
 
@@ -52,6 +56,22 @@ export default function HomeScreen() {
       try {
         setCheckingAccess(true);
 
+        /*
+         * ------------------------------------------------
+         * Initialisation SQLite
+         * ------------------------------------------------
+         */
+        await initDatabase();
+
+        console.log(
+          'SQLite ScorpionTV OK',
+        );
+
+        /*
+         * ------------------------------------------------
+         * Récupération du token
+         * ------------------------------------------------
+         */
         const token = await getAuthToken();
 
         console.log(
@@ -177,8 +197,54 @@ export default function HomeScreen() {
           access.xtream?.server_url,
         );
 
+        /*
+         * ------------------------------------------------
+         * Vérification de la synchronisation initiale
+         * ------------------------------------------------
+         */
+        console.log(
+          'VÉRIFICATION DE LA SYNCHRONISATION INITIALE...',
+        );
+
+        const initialSyncRequired =
+          await needsInitialCatalogSync();
+
+        console.log(
+          'SYNCHRONISATION INITIALE NÉCESSAIRE :',
+          initialSyncRequired,
+        );
+
+        /*
+         * ------------------------------------------------
+         * Accès catalogue validé
+         * ------------------------------------------------
+         */
         setCatalogAccess(true);
         setAccessChecked(true);
+
+        /*
+         * ------------------------------------------------
+         * Première utilisation / catalogue incomplet
+         * ------------------------------------------------
+         */
+        if (initialSyncRequired) {
+          console.log(
+            'CATALOGUE NON INITIALISÉ → /initial-sync',
+          );
+
+          router.replace('/initial-sync');
+
+          return;
+        }
+
+        /*
+         * ------------------------------------------------
+         * Catalogue déjà initialisé
+         * ------------------------------------------------
+         */
+        console.log(
+          'CATALOGUE DÉJÀ INITIALISÉ → ACCUEIL',
+        );
       } catch (error) {
         console.error(
           'ERREUR VÉRIFICATION ACCÈS :',
@@ -236,19 +302,6 @@ export default function HomeScreen() {
    * ------------------------------------------------------
    */
   useEffect(() => {
-    initDatabase()
-      .then(() => {
-        console.log(
-          'SQLite ScorpionTV OK',
-        );
-      })
-      .catch((error: unknown) => {
-        console.error(
-          'Erreur SQLite :',
-          error,
-        );
-      });
-
     checkUserAccess();
   }, [checkUserAccess]);
 
@@ -329,7 +382,9 @@ export default function HomeScreen() {
    */
   if (checkingAccess) {
     return (
-      <SafeAreaView style={styles.loadingContainer}>
+      <SafeAreaView
+        style={styles.loadingContainer}
+      >
         <ActivityIndicator
           size="large"
           color="#E50914"
@@ -428,7 +483,7 @@ export default function HomeScreen() {
               }
             >
               <Text style={styles.icon}>
-                📺
+                🗂️
               </Text>
 
               <Text style={styles.cardTitle}>

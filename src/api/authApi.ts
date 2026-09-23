@@ -2,8 +2,8 @@
   AuthUser,
   getAuthToken,
   saveAuthSession,
+  clearAuthSession,
 } from '../storage/authStorage';
-
 const API_BASE_URL =
   'https://api.scorpiontv.cantic-mali.com';
 
@@ -169,3 +169,54 @@ export async function changePassword(
 
   return data;
 }
+
+
+export async function logout(): Promise<void> {
+  const token = await getAuthToken();
+
+  if (!token) {
+    await clearAuthSession();
+    return;
+  }
+
+  try {
+    const response = await fetch(
+      `${API_BASE_URL}/api/auth/logout`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+        },
+      },
+    );
+
+    console.log(
+      'LOGOUT SERVEUR :',
+      response.status,
+    );
+
+    if (!response.ok) {
+      const text = await response.text();
+
+      console.error(
+        'ERREUR LOGOUT SERVEUR :',
+        response.status,
+        text,
+      );
+    }
+  } catch (error) {
+    console.error(
+      'ERREUR RÉSEAU LOGOUT :',
+      error,
+    );
+  } finally {
+    /*
+     * Même si le serveur est momentanément inaccessible,
+     * on supprime la session locale.
+     */
+    await clearAuthSession();
+  }
+}
+

@@ -20,6 +20,28 @@ const liveIconCache = new Map<number, string>();
 
 /*
 ============================================================
+TYPE RÉSULTAT SYNCHRONISATION
+============================================================
+*/
+
+type LiveSyncResult = {
+  synchronized: boolean;
+  serverCount: number;
+  sqliteCount: number;
+  categoriesCount: number;
+  channelsCount: number;
+};
+
+/*
+============================================================
+PROMESSE DE SYNCHRONISATION UNIQUE
+============================================================
+*/
+
+let liveSyncPromise: Promise<LiveSyncResult> | null = null;
+
+/*
+============================================================
 PROGRESSION
 ============================================================
 */
@@ -253,6 +275,7 @@ export async function syncLiveChannels(
   serverChannels?: XtreamLiveChannel[],
   xtreamClient?: XtreamClient,
   adultAccess?: boolean,
+  adultCategoryIds?: Set<string>,
 ): Promise<number> {
   const db = await initDatabase();
 
@@ -285,16 +308,22 @@ export async function syncLiveChannels(
   ============================================================
   */
 
-  const categories =
-    await client.getLiveCategories();
+  let resolvedAdultCategoryIds =
+    adultCategoryIds;
 
-  const adultCategoryIds = new Set<string>();
+  if (!resolvedAdultCategoryIds) {
+    const categories =
+      await client.getLiveCategories();
 
-  for (const category of categories) {
-    if (isAdultCategory(category)) {
-      adultCategoryIds.add(
-        String(category.category_id),
-      );
+    resolvedAdultCategoryIds =
+      new Set<string>();
+
+    for (const category of categories) {
+      if (isAdultCategory(category)) {
+        resolvedAdultCategoryIds.add(
+          String(category.category_id),
+        );
+      }
     }
   }
 
@@ -304,22 +333,19 @@ export async function syncLiveChannels(
   ============================================================
   */
 
-  const accessibleChannels = allowAdult
-    ? channels
-    : channels.filter(
-        (channel) =>
-          !isAdultChannel(
-            channel,
-            adultCategoryIds,
-          ),
-      );
+  const accessibleChannels =
+    allowAdult
+      ? channels
+      : channels.filter(
+          (channel) =>
+            !isAdultChannel(
+              channel,
+              resolvedAdultCategoryIds!,
+            ),
+        );
 
-  console.log(
-    'CHAÎNES LIVE ACCESSIBLES :',
-    accessibleChannels.length,
-  );
-
-  const total = accessibleChannels.length;
+  const total =
+    accessibleChannels.length;
 
   const BATCH_SIZE = 500;
 
@@ -331,7 +357,8 @@ export async function syncLiveChannels(
   ============================================================
   */
 
-  const serverStreamIds = new Set<number>();
+  const serverStreamIds =
+    new Set<number>();
 
   for (const channel of accessibleChannels) {
     serverStreamIds.add(
@@ -367,7 +394,7 @@ export async function syncLiveChannels(
 
           if (channel.stream_icon) {
             liveIconCache.set(
-              channel.stream_id,
+              Number(channel.stream_id),
               channel.stream_icon,
             );
           }
@@ -428,23 +455,17 @@ export async function syncLiveChannels(
 
     current += batch.length;
 
-    if (
-      current === BATCH_SIZE ||
-      current === total ||
-      current % BATCH_SIZE === 0
-    ) {
-      onProgress?.(
-        current,
-        total,
-      );
+    onProgress?.(
+      current,
+      total,
+    );
 
-      console.log(
-        'CHAÎNES LIVE UPSERT :',
-        current,
-        '/',
-        total,
-      );
-    }
+    console.log(
+      'CHAÎNES LIVE UPSERT :',
+      current,
+      '/',
+      total,
+    );
   }
 
   /*
@@ -525,353 +546,370 @@ export async function syncLiveTVIfNeeded(
   onProgress?: (
     progress: LiveSyncProgress,
   ) => void,
-) {
-  const db = await initDatabase();
-
-  console.log('================================');
-  console.log('VÉRIFICATION LIVE TV');
-  console.log('================================');
-
-  /*
-  ============================================================
-  RÉCUPÉRATION ACCÈS UTILISATEUR
-  ============================================================
-  */
-
-  const liveAccess =
-    await getLiveXtreamClient();
-
-  const client =
-    liveAccess.client;
-
-  const adultAccess =
-    liveAccess.adultAccess;
-
-  /*
-  ============================================================
-  RÉCUPÉRATION SERVEUR
-  ============================================================
-  */
-
-  console.log(
-    'RÉCUPÉRATION DES CHAÎNES SERVEUR...',
-  );
-
-  const serverChannels =
-    await client.getLiveStreams();
-
-  /*
-  ============================================================
-  RÉCUPÉRATION CATÉGORIES
-  ============================================================
-  */
-
-  const serverCategories =
-    await client.getLiveCategories();
-
-  const adultCategoryIds =
-    new Set<string>();
-
-  for (
-    const category of serverCategories
-  ) {
-    if (isAdultCategory(category)) {
-      adultCategoryIds.add(
-        String(category.category_id),
-      );
-    }
-  }
-
-  /*
-  ============================================================
-  FILTRAGE SELON ABONNEMENT
-  ============================================================
-  */
-
-  const accessibleChannels =
-    adultAccess
-      ? serverChannels
-      : serverChannels.filter(
-          (channel) =>
-            !isAdultChannel(
-              channel,
-              adultCategoryIds,
-            ),
-        );
-
-  const serverCount =
-    accessibleChannels.length;
-
-  /*
-  ============================================================
-  NOMBRE SQLITE
-  ============================================================
-  */
-
-  const result =
-    await db.getFirstAsync<{
-      count: number;
-    }>(
-      'SELECT COUNT(*) AS count FROM live_channels;',
+): Promise<LiveSyncResult> {
+  if (liveSyncPromise) {
+    console.log(
+      'SYNCHRONISATION LIVE TV DÉJÀ EN COURS — ATTENTE...',
     );
 
-  const sqliteCount =
-    Number(result?.count ?? 0);
-
-  console.log(
-    'NOMBRE CHAÎNES SERVEUR ACCESSIBLES :',
-    serverCount,
-  );
-
-  console.log(
-    'NOMBRE CHAÎNES SQLITE :',
-    sqliteCount,
-  );
-
-  /*
-  ============================================================
-  IDENTIFIANTS SERVEUR / SQLITE
-  ============================================================
-  */
-
-  const serverIds =
-    new Set<number>();
-
-  for (
-    const channel of accessibleChannels
-  ) {
-    serverIds.add(
-      Number(channel.stream_id),
-    );
+    return liveSyncPromise;
   }
 
-  const localChannels =
-    await db.getAllAsync<{
-      stream_id: number;
-    }>(
-      'SELECT stream_id FROM live_channels;',
-    );
+  liveSyncPromise = (async () => {
+    const db = await initDatabase();
 
-  const localIds =
-    new Set<number>();
-
-  for (
-    const channel of localChannels
-  ) {
-    localIds.add(
-      Number(channel.stream_id),
-    );
-  }
-
-  /*
-  ============================================================
-  COMPARAISON INTELLIGENTE
-  ============================================================
-  */
-
-  let hasChanges =
-    serverIds.size !== localIds.size;
-
-  if (!hasChanges) {
-    for (const streamId of serverIds) {
-      if (!localIds.has(streamId)) {
-        hasChanges = true;
-        break;
-      }
-    }
-  }
-
-  /*
-  ============================================================
-  AUCUN CHANGEMENT
-  ============================================================
-  */
-
-  if (
-    !hasChanges &&
-    sqliteCount > 0
-  ) {
     console.log('================================');
-    console.log(
-      'CATALOGUE LIVE TV DÉJÀ À JOUR',
-    );
-    console.log(
-      'AUCUN UPSERT NÉCESSAIRE',
-    );
-    console.log(
-      'ACTUALISATION DU CACHE DES LOGOS',
-    );
+    console.log('VÉRIFICATION LIVE TV');
     console.log('================================');
 
-    let iconsLoaded = 0;
+    /*
+    ============================================================
+    RÉCUPÉRATION ACCÈS UTILISATEUR
+    ============================================================
+    */
+
+    const liveAccess =
+      await getLiveXtreamClient();
+
+    const client =
+      liveAccess.client;
+
+    const adultAccess =
+      liveAccess.adultAccess;
+
+    /*
+    ============================================================
+    RÉCUPÉRATION SERVEUR
+    ============================================================
+    */
+
+    console.log(
+      'RÉCUPÉRATION DES CHAÎNES SERVEUR...',
+    );
+
+    const serverChannels =
+      await client.getLiveStreams();
+
+    /*
+    ============================================================
+    RÉCUPÉRATION CATÉGORIES
+    ============================================================
+    */
+
+    const serverCategories =
+      await client.getLiveCategories();
+
+    const adultCategoryIds =
+      new Set<string>();
 
     for (
-      const channel of accessibleChannels
+      const category of serverCategories
     ) {
-      if (channel.stream_icon) {
-        liveIconCache.set(
-          channel.stream_id,
-          channel.stream_icon,
+      if (isAdultCategory(category)) {
+        adultCategoryIds.add(
+          String(category.category_id),
         );
-
-        iconsLoaded++;
       }
     }
 
+    /*
+    ============================================================
+    FILTRAGE SELON ABONNEMENT
+    ============================================================
+    */
+
+    const accessibleChannels =
+      adultAccess
+        ? serverChannels
+        : serverChannels.filter(
+            (channel) =>
+              !isAdultChannel(
+                channel,
+                adultCategoryIds,
+              ),
+          );
+
+    const serverCount =
+      accessibleChannels.length;
+
+    /*
+    ============================================================
+    NOMBRE SQLITE
+    ============================================================
+    */
+
+    const result =
+      await db.getFirstAsync<{
+        count: number;
+      }>(
+        'SELECT COUNT(*) AS count FROM live_channels;',
+      );
+
+    const sqliteCount =
+      Number(result?.count ?? 0);
+
     console.log(
-      'LOGOS MIS EN CACHE :',
-      iconsLoaded,
+      'NOMBRE CHAÎNES SERVEUR ACCESSIBLES :',
+      serverCount,
+    );
+
+    console.log(
+      'NOMBRE CHAÎNES SQLITE :',
+      sqliteCount,
     );
 
     /*
     ============================================================
-    VÉRIFICATION DES CATÉGORIES
+    IDENTIFIANTS SERVEUR / SQLITE
     ============================================================
     */
 
-    const localCategoryResult =
-      await db.getFirstAsync<{
-        count: number;
+    const serverIds =
+      new Set<number>();
+
+    for (
+      const channel of accessibleChannels
+    ) {
+      serverIds.add(
+        Number(channel.stream_id),
+      );
+    }
+
+    const localChannels =
+      await db.getAllAsync<{
+        stream_id: number;
       }>(
-        'SELECT COUNT(*) AS count FROM live_categories;',
+        'SELECT stream_id FROM live_channels;',
       );
 
-    const localCategoriesCount =
-      Number(
-        localCategoryResult?.count ?? 0,
-      );
+    const localIds =
+      new Set<number>();
 
-    const accessibleCategories =
-      adultAccess
-        ? serverCategories
-        : serverCategories.filter(
-            (category) =>
-              !isAdultCategory(category),
-          );
+    for (
+      const channel of localChannels
+    ) {
+      localIds.add(
+        Number(channel.stream_id),
+      );
+    }
+
+    /*
+    ============================================================
+    COMPARAISON
+    ============================================================
+    */
+
+    let hasChanges =
+      serverIds.size !== localIds.size;
+
+    if (!hasChanges) {
+      for (const streamId of serverIds) {
+        if (!localIds.has(streamId)) {
+          hasChanges = true;
+          break;
+        }
+      }
+    }
+
+    /*
+    ============================================================
+    AUCUN CHANGEMENT
+    ============================================================
+    */
 
     if (
-      localCategoriesCount !==
-      accessibleCategories.length
+      !hasChanges &&
+      sqliteCount > 0
     ) {
+      console.log('================================');
       console.log(
-        'CATÉGORIES MODIFIÉES : SYNCHRONISATION...',
+        'CATALOGUE LIVE TV DÉJÀ À JOUR',
+      );
+      console.log(
+        'AUCUN UPSERT NÉCESSAIRE',
+      );
+      console.log(
+        'ACTUALISATION DU CACHE DES LOGOS',
+      );
+      console.log('================================');
+
+      let iconsLoaded = 0;
+
+      for (
+        const channel of accessibleChannels
+      ) {
+        if (channel.stream_icon) {
+          liveIconCache.set(
+            Number(channel.stream_id),
+            channel.stream_icon,
+          );
+
+          iconsLoaded++;
+        }
+      }
+
+      console.log(
+        'LOGOS MIS EN CACHE :',
+        iconsLoaded,
       );
 
-      const categoriesCount =
-        await syncLiveCategories(
-          client,
-          adultAccess,
+      /*
+      ============================================================
+      VÉRIFICATION DES CATÉGORIES
+      ============================================================
+      */
+
+      const localCategoryResult =
+        await db.getFirstAsync<{
+          count: number;
+        }>(
+          'SELECT COUNT(*) AS count FROM live_categories;',
         );
 
+      const localCategoriesCount =
+        Number(
+          localCategoryResult?.count ?? 0,
+        );
+
+      const accessibleCategories =
+        adultAccess
+          ? serverCategories
+          : serverCategories.filter(
+              (category) =>
+                !isAdultCategory(category),
+            );
+
+      if (
+        localCategoriesCount !==
+        accessibleCategories.length
+      ) {
+        console.log(
+          'CATÉGORIES MODIFIÉES : SYNCHRONISATION...',
+        );
+
+        const categoriesCount =
+          await syncLiveCategories(
+            client,
+            adultAccess,
+          );
+
+        return {
+          synchronized: true,
+          serverCount,
+          sqliteCount,
+          categoriesCount,
+          channelsCount: sqliteCount,
+        };
+      }
+
       return {
-        synchronized: true,
+        synchronized: false,
         serverCount,
         sqliteCount,
-        categoriesCount,
-        channelsCount: sqliteCount,
+        categoriesCount:
+          localCategoriesCount,
+        channelsCount:
+          sqliteCount,
       };
     }
 
-    return {
-      synchronized: false,
-      serverCount,
-      sqliteCount,
-      categoriesCount:
-        localCategoriesCount,
-      channelsCount:
-        sqliteCount,
-    };
-  }
+    /*
+    ============================================================
+    MODIFICATION DÉTECTÉE
+    ============================================================
+    */
 
-  /*
-  ============================================================
-  MODIFICATION DÉTECTÉE
-  ============================================================
-  */
-
-  console.log('================================');
-  console.log(
-    'MODIFICATION DU CATALOGUE DÉTECTÉE',
-  );
-  console.log(
-    'SYNCHRONISATION NÉCESSAIRE',
-  );
-  console.log('================================');
-
-  /*
-  ============================================================
-  CATÉGORIES
-  ============================================================
-  */
-
-  const categoriesCount =
-    await syncLiveCategories(
-      client,
-      adultAccess,
+    console.log('================================');
+    console.log(
+      'MODIFICATION DU CATALOGUE DÉTECTÉE',
     );
+    console.log(
+      'SYNCHRONISATION NÉCESSAIRE',
+    );
+    console.log('================================');
 
-  onProgress?.({
-    phase: 'categories',
-    current: categoriesCount,
-    total: categoriesCount,
-  });
+    /*
+    ============================================================
+    CATÉGORIES
+    ============================================================
+    */
 
-  /*
-  ============================================================
-  CHAÎNES
-  ============================================================
-  */
+    const categoriesCount =
+      await syncLiveCategories(
+        client,
+        adultAccess,
+      );
 
-  const channelsCount =
-    await syncLiveChannels(
-      (
-        current,
-        total,
-      ) => {
-        onProgress?.({
-          phase: 'channels',
+    onProgress?.({
+      phase: 'categories',
+      current: categoriesCount,
+      total: categoriesCount,
+    });
+
+    /*
+    ============================================================
+    CHAÎNES
+    ============================================================
+    */
+
+    const channelsCount =
+      await syncLiveChannels(
+        (
           current,
           total,
-        });
-      },
-      serverChannels,
-      client,
-      adultAccess,
+        ) => {
+          onProgress?.({
+            phase: 'channels',
+            current,
+            total,
+          });
+        },
+        serverChannels,
+        client,
+        adultAccess,
+        adultCategoryIds,
+      );
+
+    /*
+    ============================================================
+    TERMINÉ
+    ============================================================
+    */
+
+    onProgress?.({
+      phase: 'completed',
+      current: channelsCount,
+      total: channelsCount,
+    });
+
+    console.log('================================');
+    console.log(
+      'LIVE TV SYNCHRONISÉ',
     );
+    console.log(
+      'CATÉGORIES :',
+      categoriesCount,
+    );
+    console.log(
+      'CHAÎNES :',
+      channelsCount,
+    );
+    console.log('================================');
 
-  /*
-  ============================================================
-  TERMINÉ
-  ============================================================
-  */
+    return {
+      synchronized: true,
+      serverCount,
+      sqliteCount,
+      categoriesCount,
+      channelsCount,
+    };
+  })();
 
-  onProgress?.({
-    phase: 'completed',
-    current: channelsCount,
-    total: channelsCount,
-  });
-
-  console.log('================================');
-  console.log(
-    'LIVE TV SYNCHRONISÉ',
-  );
-  console.log(
-    'CATÉGORIES :',
-    categoriesCount,
-  );
-  console.log(
-    'CHAÎNES :',
-    channelsCount,
-  );
-  console.log('================================');
-
-  return {
-    synchronized: true,
-    serverCount,
-    sqliteCount,
-    categoriesCount,
-    channelsCount,
-  };
+  try {
+    return await liveSyncPromise;
+  } finally {
+    liveSyncPromise = null;
+  }
 }
 
 /*
@@ -927,6 +965,22 @@ export async function syncLiveTV(
   const channels =
     await client.getLiveStreams();
 
+  const serverCategories =
+    await client.getLiveCategories();
+
+  const adultCategoryIds =
+    new Set<string>();
+
+  for (
+    const category of serverCategories
+  ) {
+    if (isAdultCategory(category)) {
+      adultCategoryIds.add(
+        String(category.category_id),
+      );
+    }
+  }
+
   const channelsCount =
     await syncLiveChannels(
       (
@@ -942,6 +996,7 @@ export async function syncLiveTV(
       channels,
       client,
       adultAccess,
+      adultCategoryIds,
     );
 
   /*
@@ -1032,7 +1087,10 @@ export async function getLiveChannelsFromDatabase(
   ============================================================
   */
 
-  if (categoryId) {
+  if (
+    categoryId &&
+    categoryId !== 'all'
+  ) {
     const result =
       await db.getAllAsync<Channel>(
         'SELECT ' +
@@ -1122,7 +1180,10 @@ export async function getLiveChannelsCount(
 ): Promise<number> {
   const db = await initDatabase();
 
-  if (categoryId) {
+  if (
+    categoryId &&
+    categoryId !== 'all'
+  ) {
     const result =
       await db.getFirstAsync<{
         count: number;

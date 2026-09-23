@@ -11,9 +11,7 @@ export function initDatabase() {
 }
 
 async function openDatabase() {
-  const db = await SQLite.openDatabaseAsync(
-    'scorpiontv_v2.db'
-  );
+  const db = await SQLite.openDatabaseAsync('scorpiontv_v2.db');
 
   /*
   ============================================================
@@ -87,15 +85,28 @@ async function openDatabase() {
   */
 
   /*
-   * IMPORTANT :
-   * On ne supprime plus les tables Séries au démarrage.
+   * Migration propre des anciennes tables Séries.
    *
-   * Les données Séries doivent rester en cache SQLite
-   * entre les différentes ouvertures de l'application.
+   * On ne touche PAS aux films, au Live TV ou au M3U.
+   *
+   * Comme le projet est encore en développement, on repart
+   * avec une structure propre pour les séries.
    */
 
   await db.execAsync(`
-    CREATE TABLE IF NOT EXISTS series_categories (
+    DROP TABLE IF EXISTS series_episodes;
+  `);
+
+  await db.execAsync(`
+    DROP TABLE IF EXISTS series;
+  `);
+
+  await db.execAsync(`
+    DROP TABLE IF EXISTS series_categories;
+  `);
+
+  await db.execAsync(`
+    CREATE TABLE series_categories (
       category_id TEXT PRIMARY KEY NOT NULL,
       category_name TEXT NOT NULL,
       parent_id INTEGER
@@ -103,7 +114,7 @@ async function openDatabase() {
   `);
 
   await db.execAsync(`
-    CREATE TABLE IF NOT EXISTS series (
+    CREATE TABLE series (
       series_id INTEGER PRIMARY KEY NOT NULL,
       name TEXT NOT NULL,
       plot TEXT,
@@ -121,7 +132,7 @@ async function openDatabase() {
   `);
 
   await db.execAsync(`
-    CREATE TABLE IF NOT EXISTS series_episodes (
+    CREATE TABLE series_episodes (
       episode_id INTEGER PRIMARY KEY NOT NULL,
       series_id INTEGER NOT NULL,
       season INTEGER,
@@ -190,7 +201,10 @@ async function openDatabase() {
     );
   `);
 
-  /*
+
+
+
+    /*
   ============================================================
   NOTIFICATIONS
   ============================================================
@@ -209,50 +223,6 @@ async function openDatabase() {
       created_at TEXT NOT NULL,
       expires_at TEXT
     );
-  `);
-
-  /*
-  ============================================================
-  ÉTAT DE SYNCHRONISATION DES CATALOGUES
-  ============================================================
-  */
-
-  /*
-   * Cette table permet de savoir si la première
-   * synchronisation de chaque catalogue est terminée.
-   *
-   * Exemple :
-   *
-   * live    -> completed
-   * movies  -> completed
-   * series  -> pending
-   *
-   * Dans ce cas, seul le catalogue Séries devra encore
-   * passer par l'écran de première synchronisation.
-   */
-
-  await db.execAsync(`
-    CREATE TABLE IF NOT EXISTS catalog_sync_state (
-      catalog TEXT PRIMARY KEY NOT NULL,
-      status TEXT NOT NULL DEFAULT 'pending',
-      updated_at TEXT
-    );
-  `);
-
-  /*
-   * Initialisation des trois catalogues.
-   *
-   * INSERT OR IGNORE permet de ne pas écraser l'état
-   * existant lors des prochains démarrages.
-   */
-
-  await db.execAsync(`
-    INSERT OR IGNORE INTO catalog_sync_state
-      (catalog, status, updated_at)
-    VALUES
-      ('live', 'pending', NULL),
-      ('movies', 'pending', NULL),
-      ('series', 'pending', NULL);
   `);
 
   console.log('SQLite ScorpionTV OK');
