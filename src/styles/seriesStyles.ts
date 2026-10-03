@@ -1,4 +1,4 @@
-﻿import { StyleSheet } from 'react-native';
+import { StyleSheet } from 'react-native';
 
 import { COLORS } from './colors';
 
@@ -28,7 +28,7 @@ export const seriesStyles = StyleSheet.create({
     paddingHorizontal: 20,
     alignItems: 'center',
   },
-  
+
 
   category: {
     paddingHorizontal: 16,

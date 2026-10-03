@@ -1,4 +1,4 @@
-﻿import React, {
+import React, {
   useEffect,
   useMemo,
   useState,
@@ -288,7 +288,6 @@ export default function SeriesDetailsScreen() {
    * Transforme un épisode Xtream
    * en SeriesEpisode.
    */
-  
 const mapEpisode = (
   episode: XtreamEpisode,
   seriesId: number,

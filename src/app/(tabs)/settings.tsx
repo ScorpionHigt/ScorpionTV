@@ -1,4 +1,4 @@
-﻿import AsyncStorage from '@react-native-async-storage/async-storage';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useEffect, useState } from 'react';
 import { clearLocalProtection,
   getLocalProtection,
@@ -348,8 +348,7 @@ const handleFactoryReset = () => {
       },
     ],
   });
-}; 
-
+};
 const handleLogout = () => {
   showDialog({
     title: 'Déconnexion',
@@ -632,7 +631,7 @@ const handleLogout = () => {
             <Text style={styles.arrow}>
               ›
             </Text>
-          </Pressable>      
+          </Pressable>
           <Pressable
             style={styles.settingRow}
             onPress={handleFactoryReset}
@@ -679,7 +678,7 @@ const handleLogout = () => {
         </View>
         <Text style={styles.version}>
           {APP_NAME} • v{APP_VERSION} © {APP_YEAR}  PlumaSoft inc
-        </Text>       
+        </Text>
       </ScrollView>
     </SafeAreaView>
   );

@@ -1,4 +1,4 @@
-﻿import React, {
+import React, {
   memo,
   useCallback,
   useEffect,
@@ -348,17 +348,13 @@ export default function LiveScreen() {
 
   /* ============================================================
      LECTURE USER ACCESS
-     
      IMPORTANT :
      Cette fonction ne fait PLUS de requête réseau.
-
      HomeScreen charge UserAccess au démarrage de
      l'application avec getUserAccess().
-
      LiveScreen récupère ensuite directement les données
      depuis le cache mémoire global.
   ============================================================ */
-
   const loadUserAccess =
     useCallback(() => {
       try {
