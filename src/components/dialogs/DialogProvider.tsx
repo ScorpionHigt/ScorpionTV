@@ -8,6 +8,7 @@
 
 import AppDialog from './AppDialog';
 import ConfirmDialog from './ConfirmDialog';
+import SecurityCodeDialog from './SecurityCodeDialog';
 import UpdateDialog from './UpdateDialog';
 
 type AppDialogButton = {
@@ -43,6 +44,22 @@ type ConfirmDialogOptions = {
   danger?: boolean;
 };
 
+type SecurityCodeDialogOptions = {
+  type: 'security';
+
+  title: string;
+  message?: string;
+  icon?: string;
+
+  confirmLabel?: string;
+  cancelLabel?: string;
+
+  onConfirm: (code: string) => void;
+  onCancel?: () => void;
+
+  danger?: boolean;
+};
+
 type UpdateDialogOptions = {
   type: 'update';
 
@@ -55,6 +72,7 @@ type UpdateDialogOptions = {
 type ShowDialogOptions =
   | AppDialogOptions
   | ConfirmDialogOptions
+  | SecurityCodeDialogOptions
   | UpdateDialogOptions;
 
 type DialogContextValue = {
@@ -87,7 +105,12 @@ export default function DialogProvider({
   );
 
   const handleAppDialogClose = useCallback(() => {
-    if (!dialog || dialog.type === 'confirm' || dialog.type === 'update') {
+    if (
+      !dialog ||
+      dialog.type === 'confirm' ||
+      dialog.type === 'security' ||
+      dialog.type === 'update'
+    ) {
       return;
     }
 
@@ -99,7 +122,10 @@ export default function DialogProvider({
   }, [dialog]);
 
   const handleConfirmCancel = useCallback(() => {
-    if (!dialog || dialog.type !== 'confirm') {
+    if (
+      !dialog ||
+      dialog.type !== 'confirm'
+    ) {
       return;
     }
 
@@ -111,7 +137,10 @@ export default function DialogProvider({
   }, [dialog]);
 
   const handleConfirm = useCallback(() => {
-    if (!dialog || dialog.type !== 'confirm') {
+    if (
+      !dialog ||
+      dialog.type !== 'confirm'
+    ) {
       return;
     }
 
@@ -122,8 +151,44 @@ export default function DialogProvider({
     onConfirm();
   }, [dialog]);
 
+  const handleSecurityCancel = useCallback(() => {
+    if (
+      !dialog ||
+      dialog.type !== 'security'
+    ) {
+      return;
+    }
+
+    const onCancel = dialog.onCancel;
+
+    setDialog(null);
+
+    onCancel?.();
+  }, [dialog]);
+
+  const handleSecurityConfirm = useCallback(
+    (code: string) => {
+      if (
+        !dialog ||
+        dialog.type !== 'security'
+      ) {
+        return;
+      }
+
+      const onConfirm = dialog.onConfirm;
+
+      setDialog(null);
+
+      onConfirm(code);
+    },
+    [dialog],
+  );
+
   const handleUpdate = useCallback(() => {
-    if (!dialog || dialog.type !== 'update') {
+    if (
+      !dialog ||
+      dialog.type !== 'update'
+    ) {
       return;
     }
 
@@ -131,7 +196,10 @@ export default function DialogProvider({
   }, [dialog]);
 
   const handleUpdateLater = useCallback(() => {
-    if (!dialog || dialog.type !== 'update') {
+    if (
+      !dialog ||
+      dialog.type !== 'update'
+    ) {
       return;
     }
 
@@ -143,7 +211,12 @@ export default function DialogProvider({
   }, [dialog]);
 
   const appDialogButtons = useMemo(() => {
-    if (!dialog || dialog.type === 'confirm' || dialog.type === 'update') {
+    if (
+      !dialog ||
+      dialog.type === 'confirm' ||
+      dialog.type === 'security' ||
+      dialog.type === 'update'
+    ) {
       return [];
     }
 
@@ -157,15 +230,20 @@ export default function DialogProvider({
       ];
     }
 
-    return dialog.buttons.map((button, index) => ({
-      label: button.label,
-      variant: button.variant ?? 'primary',
-      onPress: () => {
-        hideDialog();
-        button.onPress?.();
-      },
-      key: `${button.label}-${index}`,
-    }));
+    return dialog.buttons.map(
+      (button, index) => ({
+        label: button.label,
+        variant:
+          button.variant ?? 'primary',
+
+        onPress: () => {
+          hideDialog();
+          button.onPress?.();
+        },
+
+        key: `${button.label}-${index}`,
+      }),
+    );
   }, [dialog, hideDialog]);
 
   const value = useMemo(
@@ -181,6 +259,7 @@ export default function DialogProvider({
       {children}
 
       {dialog?.type !== 'confirm' &&
+        dialog?.type !== 'security' &&
         dialog?.type !== 'update' && (
           <AppDialog
             visible={dialog !== null}
@@ -197,11 +276,37 @@ export default function DialogProvider({
           visible
           title={dialog.title}
           message={dialog.message}
-          confirmLabel={dialog.confirmLabel}
-          cancelLabel={dialog.cancelLabel}
+          confirmLabel={
+            dialog.confirmLabel
+          }
+          cancelLabel={
+            dialog.cancelLabel
+          }
           danger={dialog.danger}
           onConfirm={handleConfirm}
           onCancel={handleConfirmCancel}
+        />
+      )}
+
+      {dialog?.type === 'security' && (
+        <SecurityCodeDialog
+          visible
+          title={dialog.title}
+          message={dialog.message}
+          icon={dialog.icon}
+          confirmLabel={
+            dialog.confirmLabel
+          }
+          cancelLabel={
+            dialog.cancelLabel
+          }
+          danger={dialog.danger}
+          onConfirm={
+            handleSecurityConfirm
+          }
+          onCancel={
+            handleSecurityCancel
+          }
         />
       )}
 
@@ -218,7 +323,8 @@ export default function DialogProvider({
 }
 
 export function useDialog(): DialogContextValue {
-  const context = useContext(DialogContext);
+  const context =
+    useContext(DialogContext);
 
   if (!context) {
     throw new Error(

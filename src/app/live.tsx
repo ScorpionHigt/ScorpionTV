@@ -12,12 +12,12 @@ import {
   Image,
   Modal,
   Pressable,
-  StyleSheet,
   Text,
   TextInput,
   View,
 } from 'react-native';
 
+import { liveStyles as styles } from '../styles/liveStyles';
 import { router } from 'expo-router';
 
 import { Channel } from '../types/live';
@@ -25,7 +25,7 @@ import { setZappingChannels } from '../store/liveZappingStore';
 import { XtreamClient } from '../api/xtreamClient';
 
 import {
-  getUserAccess,
+  getCachedUserAccess,
   UserAccessError,
 } from '../api/accessApi';
 
@@ -63,7 +63,6 @@ type XtreamAccess = {
   password: string;
 };
 
-const PAGE_SIZE = 100;
 const DB_BATCH_SIZE = 500;
 
 /* ============================================================
@@ -231,11 +230,6 @@ export default function LiveScreen() {
     setPendingAdultCategory,
   ] = useState<Category | null>(null);
 
-  /*
-   * L'accès adulte de l'abonnement ne suffit pas.
-   * Le mot de passe local doit également avoir
-   * été validé pour afficher les chaînes adultes.
-   */
   const [adultUnlocked, setAdultUnlocked] =
     useState(false);
 
@@ -292,7 +286,6 @@ export default function LiveScreen() {
       [],
     );
 
- 
   /* ============================================================
      IDENTIFICATION CHAÎNE ADULTE
   ============================================================ */
@@ -309,10 +302,6 @@ export default function LiveScreen() {
             ? String(channel.category_id)
             : '';
 
-        /*
-         * Une chaîne est adulte si elle appartient
-         * à une catégorie adulte.
-         */
         if (
           categoryId &&
           adultCategoryIds.has(categoryId)
@@ -320,12 +309,6 @@ export default function LiveScreen() {
           return true;
         }
 
-        /*
-         * Vérification du marqueur is_adult.
-         *
-         * Dans le type Channel, is_adult est
-         * string | null.
-         */
         const adultValue =
           String(
             channel.is_adult ?? '',
@@ -342,11 +325,6 @@ export default function LiveScreen() {
           return true;
         }
 
-        /*
-         * Dernière sécurité :
-         * certaines listes Xtream mettent directement
-         * des mots-clés adultes dans le nom de la chaîne.
-         */
         const normalizedName =
           String(
             channel.name ?? '',
@@ -368,22 +346,44 @@ export default function LiveScreen() {
       [],
     );
 
-
   /* ============================================================
-     VÉRIFICATION ACCÈS UTILISATEUR
+     LECTURE USER ACCESS
+     
+     IMPORTANT :
+     Cette fonction ne fait PLUS de requête réseau.
+
+     HomeScreen charge UserAccess au démarrage de
+     l'application avec getUserAccess().
+
+     LiveScreen récupère ensuite directement les données
+     depuis le cache mémoire global.
   ============================================================ */
 
   const loadUserAccess =
-    useCallback(async () => {
+    useCallback(() => {
       try {
         console.log(
-          'VÉRIFICATION ACCÈS LIVE TV...',
+          'VÉRIFICATION ACCÈS LIVE TV DEPUIS LE CACHE MÉMOIRE...',
         );
 
         const result =
-          await getUserAccess();
+          getCachedUserAccess();
 
-        if (!mountedRef.current) {
+        /*
+         * Le cache doit normalement être déjà rempli
+         * par HomeScreen.
+         */
+        if (!result) {
+          console.error(
+            'USER ACCESS : cache mémoire indisponible pour Live TV.',
+          );
+
+          if (mountedRef.current) {
+            setAccess(null);
+            setXtreamAccess(null);
+            setAccessChecked(true);
+          }
+
           return null;
         }
 
@@ -395,9 +395,11 @@ export default function LiveScreen() {
             'AUCUN ABONNEMENT ACTIF POUR LE LIVE TV',
           );
 
-          setAccess(null);
-          setXtreamAccess(null);
-          setAccessChecked(true);
+          if (mountedRef.current) {
+            setAccess(null);
+            setXtreamAccess(null);
+            setAccessChecked(true);
+          }
 
           return null;
         }
@@ -429,14 +431,16 @@ export default function LiveScreen() {
               }
             : null;
 
-        setAccess(liveAccess);
-        setXtreamAccess(
-          serverAccess,
-        );
-        setAccessChecked(true);
+        if (mountedRef.current) {
+          setAccess(liveAccess);
+          setXtreamAccess(
+            serverAccess,
+          );
+          setAccessChecked(true);
+        }
 
         console.log(
-          'ACCÈS LIVE TV AUTORISÉ :',
+          'ACCÈS LIVE TV RÉCUPÉRÉ DU CACHE :',
           liveAccess,
         );
 
@@ -450,18 +454,13 @@ export default function LiveScreen() {
           liveAccess.tv_channels,
         );
 
-        /*
-         * IMPORTANT :
-         * On retourne directement les données.
-         * On ne dépend donc pas du délai de setAccess().
-         */
         return {
           liveAccess,
           serverAccess,
         };
       } catch (error) {
         console.error(
-          'ERREUR VÉRIFICATION ACCÈS LIVE TV :',
+          'ERREUR LECTURE ACCÈS LIVE TV :',
           error,
         );
 
@@ -471,7 +470,6 @@ export default function LiveScreen() {
             error.status === 403)
         ) {
           router.replace('/login');
-
           return null;
         }
 
@@ -486,68 +484,56 @@ export default function LiveScreen() {
   /* ============================================================
      FILTRAGE DES CATÉGORIES
   ============================================================ */
-
   const filterCategories =
-    useCallback(
-      (
-        rows: any[],
-        allowAdult: boolean,
-      ): Category[] => {
-        const filteredRows =
-          rows.filter(
-            (category: any) => {
-              const categoryObject: Category =
-                {
-                  id: String(
-                    category.category_id,
-                  ),
-                  name:
-                    String(
-                      category.category_name ??
-                        '',
-                    ),
-                };
+  useCallback(
+    (
+      rows: any[],
+      allowAdult: boolean,
+    ): Category[] => {
+      const normalCategories: Category[] = [];
+      const adultCategories: Category[] = [];
 
-              if (
-                !allowAdult &&
-                isAdultCategory(
-                  categoryObject,
-                )
-              ) {
-                console.log(
-                  'CATÉGORIE ADULTE MASQUÉE :',
-                  categoryObject.name,
-                );
-
-                return false;
-              }
-
-              return true;
-            },
-          );
-
-        return [
-          {
-            id: 'all',
-            name: 'Toutes',
-          },
-          ...filteredRows.map(
-            (category: any) => ({
-              id: String(
-                category.category_id,
-              ),
-              name:
-                String(
-                  category.category_name ??
-                    '',
-                ),
-            }),
+      rows.forEach((category: any) => {
+        const categoryObject: Category = {
+          id: String(category.category_id),
+          name: String(
+            category.category_name ?? '',
           ),
-        ];
-      },
-      [isAdultCategory],
-    );
+        };
 
+        if (
+          isAdultCategory(categoryObject)
+        ) {
+          if (allowAdult) {
+            adultCategories.push(
+              categoryObject,
+            );
+          } else {
+            console.log(
+              'CATÉGORIE ADULTE MASQUÉE :',
+              categoryObject.name,
+            );
+          }
+
+          return;
+        }
+
+        normalCategories.push(
+          categoryObject,
+        );
+      });
+
+      return [
+        {
+          id: 'all',
+          name: 'Toutes',
+        },
+        ...normalCategories,
+        ...adultCategories,
+      ];
+    },
+    [isAdultCategory],
+  );
   /* ============================================================
      IDS DES CATÉGORIES ADULTES
   ============================================================ */
@@ -633,13 +619,6 @@ export default function LiveScreen() {
 
   /* ============================================================
      CONSTRUCTION DE LA LISTE "TOUTES"
-
-     RÈGLE :
-     - tv_channels = quota des chaînes normales
-     - adulte autorisé + déverrouillé :
-       toutes les chaînes adultes sont ajoutées
-     - adulte non autorisé :
-       aucune chaîne adulte
   ============================================================ */
 
   const getAllAccessibleChannels =
@@ -666,10 +645,7 @@ export default function LiveScreen() {
 
         /*
          * ------------------------------------------------------
-         * 1. PARCOURS SQLITE DANS L'ORDRE
-         *
-         * On continue jusqu'à avoir obtenu
-         * suffisamment de chaînes normales.
+         * 1. CHAÎNES NORMALES
          * ------------------------------------------------------
          */
 
@@ -709,13 +685,6 @@ export default function LiveScreen() {
               );
 
             if (adult) {
-              /*
-               * Les adultes ne consomment PAS
-               * le quota des chaînes normales.
-               *
-               * Ils seront récupérés séparément
-               * dans les catégories adultes.
-               */
               continue;
             }
 
@@ -743,10 +712,6 @@ export default function LiveScreen() {
         /*
          * ------------------------------------------------------
          * 2. CHAÎNES ADULTES
-         *
-         * Si l'abonnement autorise l'adulte
-         * ET que la protection locale a été validée,
-         * on récupère TOUTES les chaînes adultes.
          * ------------------------------------------------------
          */
 
@@ -802,12 +767,8 @@ export default function LiveScreen() {
           }
 
           /*
-           * Certaines bases peuvent avoir une chaîne
-           * marquée adulte mais rangée dans une catégorie
-           * non adulte.
-           *
-           * On la récupère également sans dépasser
-           * le contenu déjà chargé.
+           * Certaines chaînes adultes peuvent être
+           * dans une catégorie normale.
            */
           let adultScanOffset = 0;
 
@@ -976,11 +937,7 @@ export default function LiveScreen() {
           let result: Channel[] = [];
 
           /*
-           * ------------------------------------------------------
            * TOUTES
-           *
-           * 200 normales + toutes les adultes.
-           * ------------------------------------------------------
            */
 
           if (
@@ -995,12 +952,7 @@ export default function LiveScreen() {
           }
 
           /*
-           * ------------------------------------------------------
            * CATÉGORIE ADULTE
-           *
-           * Toutes les chaînes de la catégorie.
-           * Le quota normal ne s'applique PAS.
-           * ------------------------------------------------------
            */
 
           else if (
@@ -1026,11 +978,7 @@ export default function LiveScreen() {
           }
 
           /*
-           * ------------------------------------------------------
            * CATÉGORIE NORMALE
-           *
-           * Le quota de l'abonnement s'applique.
-           * ------------------------------------------------------
            */
 
           else {
@@ -1042,18 +990,20 @@ export default function LiveScreen() {
               );
 
             result =
-              result.filter(
-                channel =>
-                  !isAdultChannel(
-                    channel,
-                    getAdultCategoryIds(
-                      dbCategories,
+              result
+                .filter(
+                  channel =>
+                    !isAdultChannel(
+                      channel,
+                      getAdultCategoryIds(
+                        dbCategories,
+                      ),
                     ),
-                  ),
-              ).slice(
-                0,
-                access.tv_channels,
-              );
+                )
+                .slice(
+                  0,
+                  access.tv_channels,
+                );
           }
 
           if (
@@ -1179,10 +1129,9 @@ export default function LiveScreen() {
           let result: Channel[] = [];
 
           /*
-           * TOUTES :
-           * 200 normales + tous les adultes
-           * correspondant à la recherche.
+           * TOUTES
            */
+
           if (
             categoryId === 'all'
           ) {
@@ -1196,10 +1145,9 @@ export default function LiveScreen() {
           }
 
           /*
-           * ADULTE :
-           * toutes les chaînes adultes correspondant
-           * à la recherche.
+           * ADULTE
            */
+
           else if (
             category &&
             isAdultCategory(
@@ -1214,9 +1162,9 @@ export default function LiveScreen() {
           }
 
           /*
-           * NORMALE :
-           * maximum quota de l'abonnement.
+           * NORMALE
            */
+
           else {
             result =
               await searchLiveChannelsFromDatabase(
@@ -1301,7 +1249,7 @@ export default function LiveScreen() {
 
   /* ============================================================
      INITIALISATION
-============================================================ */
+  ============================================================ */
 
   useEffect(() => {
     mountedRef.current = true;
@@ -1318,11 +1266,14 @@ export default function LiveScreen() {
           /*
            * ------------------------------------------------------
            * 1. ACCÈS
+           *
+           * Lecture directe du cache mémoire.
+           * AUCUNE requête API ici.
            * ------------------------------------------------------
            */
 
           const accessResult =
-            await loadUserAccess();
+            loadUserAccess();
 
           if (
             !mountedRef.current
@@ -1362,6 +1313,7 @@ export default function LiveScreen() {
             setChannels([]);
             setTotalChannels(0);
             setLoading(false);
+
             initialLoadDoneRef.current =
               true;
 
@@ -1386,35 +1338,59 @@ export default function LiveScreen() {
           /*
            * ------------------------------------------------------
            * 4. AFFICHAGE SQLITE IMMÉDIAT
-           *
-           * Important :
-           * on utilise liveAccess directement,
-           * pas le state access.
            * ------------------------------------------------------
            */
 
-          let initialChannels: Channel[] =
-            [];
-
           const categoryObjects =
-            dbCategories.map(
-              (row: any) => ({
-                id: String(
-                  row.category_id,
-                ),
-                name: String(
-                  row.category_name ??
-                    '',
-                ),
-              }),
-            );
+              dbCategories.map(
+                (row: any) => ({
+                  id: String(
+                    row.category_id,
+                  ),
+                  name: String(
+                    row.category_name ??
+                      '',
+                  ),
+                }),
+              );
 
-          initialChannels =
-            await getAllAccessibleChannels(
-              categoryObjects,
-              liveAccess,
-              false,
-            );
+            /*
+             * ------------------------------------------------------
+             * CHARGEMENT INITIAL RAPIDE
+             *
+             * On lit uniquement le premier lot SQLite.
+             * La synchronisation Xtream viendra ensuite.
+             * ------------------------------------------------------
+             */
+
+            const initialBatch =
+              await getLiveChannelsFromDatabase(
+                undefined,
+                Math.min(
+                  liveAccess.tv_channels,
+                  DB_BATCH_SIZE,
+                ),
+                0,
+              );
+
+            const adultCategoryIds =
+              getAdultCategoryIds(
+                categoryObjects,
+              );
+
+            const initialChannels =
+              initialBatch
+                .filter(
+                  channel =>
+                    !isAdultChannel(
+                      channel,
+                      adultCategoryIds,
+                    ),
+                )
+                .slice(
+                  0,
+                  liveAccess.tv_channels,
+                );
 
           if (
             !mountedRef.current
@@ -1487,7 +1463,6 @@ export default function LiveScreen() {
                 }
 
                 setSyncing(true);
-
                 setSyncProgress(
                   progress,
                 );
@@ -1706,15 +1681,6 @@ export default function LiveScreen() {
           const protection =
             await getLocalProtection();
 
-          /*
-           * ------------------------------------------------------
-           * AUCUNE PROTECTION CONFIGURÉE
-           *
-           * Utilisation du DialogProvider,
-           * et non Alert.alert.
-           * ------------------------------------------------------
-           */
-
           if (!protection) {
             showDialog({
               title:
@@ -1744,12 +1710,6 @@ export default function LiveScreen() {
 
             return;
           }
-
-          /*
-           * ------------------------------------------------------
-           * PROTECTION CONFIGURÉE
-           * ------------------------------------------------------
-           */
 
           setPendingAdultCategory(
             category,
@@ -1861,10 +1821,6 @@ export default function LiveScreen() {
           return;
         }
 
-        /*
-         * Le mot de passe local est maintenant
-         * validé pour cette session Live.
-         */
         setAdultUnlocked(true);
 
         activeCategoryRef.current =
@@ -1946,12 +1902,6 @@ export default function LiveScreen() {
           return;
         }
 
-        /*
-         * ------------------------------------------------------
-         * CATÉGORIE ADULTE
-         * ------------------------------------------------------
-         */
-
         if (
           isAdultCategory(category)
         ) {
@@ -1969,12 +1919,6 @@ export default function LiveScreen() {
 
           return;
         }
-
-        /*
-         * ------------------------------------------------------
-         * CATÉGORIE NORMALE
-         * ------------------------------------------------------
-         */
 
         activeCategoryRef.current =
           categoryId;
@@ -2459,19 +2403,35 @@ export default function LiveScreen() {
       {/* ======================================================
          CHAÎNES
       ====================================================== */}
-      
+
       {channels.length === 0 ? (
-        <View style={styles.emptyContainer}>
-          <Text style={styles.emptyIcon}>
+        <View
+          style={
+            styles.emptyContainer
+          }
+        >
+          <Text
+            style={
+              styles.emptyIcon
+            }
+          >
             📺
           </Text>
 
-          <Text style={styles.emptyTitle}>
+          <Text
+            style={
+              styles.emptyTitle
+            }
+          >
             Aucune chaîne disponible
           </Text>
 
           {syncing && (
-            <Text style={styles.emptyText}>
+            <Text
+              style={
+                styles.emptyText
+              }
+            >
               Synchronisation des chaînes...
             </Text>
           )}
@@ -2479,35 +2439,58 @@ export default function LiveScreen() {
       ) : (
         <FlatList
           data={channels}
-          extraData={iconCacheVersion}
-          keyExtractor={keyExtractor}
-          renderItem={renderChannel}
+          extraData={
+            iconCacheVersion
+          }
+          keyExtractor={
+            keyExtractor
+          }
+          renderItem={
+            renderChannel
+          }
           numColumns={3}
-          contentContainerStyle={styles.channelsList}
-          columnWrapperStyle={styles.columnWrapper}
+          contentContainerStyle={
+            styles.channelsList
+          }
+          columnWrapperStyle={
+            styles.columnWrapper
+          }
           initialNumToRender={20}
           maxToRenderPerBatch={20}
           windowSize={7}
-          removeClippedSubviews={true}
-          showsVerticalScrollIndicator={false}
+          removeClippedSubviews={
+            true
+          }
+          showsVerticalScrollIndicator={
+            false
+          }
         />
       )}
 
       {/* ======================================================
          MODALE MOT DE PASSE ADULTE
-      ====================================================== */
-      }
+      ====================================================== */}
 
       <Modal
-        visible={adultPasswordModalVisible}
+        visible={
+          adultPasswordModalVisible
+        }
         transparent
         animationType="fade"
         onRequestClose={
           closeAdultPasswordModal
         }
       >
-        <View style={styles.modalOverlay}>
-          <View style={styles.passwordModal}>
+        <View
+          style={
+            styles.modalOverlay
+          }
+        >
+          <View
+            style={
+              styles.passwordModal
+            }
+          >
             <View
               style={
                 styles.passwordModalIcon
@@ -2518,7 +2501,7 @@ export default function LiveScreen() {
                   styles.passwordModalIconText
                 }
               >
-                🔒
+                🔞
               </Text>
             </View>
 
@@ -2546,14 +2529,24 @@ export default function LiveScreen() {
               }
             >
               <TextInput
-                value={adultPassword}
-                onChangeText={value => {
-                  setAdultPassword(value);
+                value={
+                  adultPassword
+                }
+                onChangeText={
+                  value => {
+                    setAdultPassword(
+                      value,
+                    );
 
-                  if (adultPasswordError) {
-                    setAdultPasswordError('');
+                    if (
+                      adultPasswordError
+                    ) {
+                      setAdultPasswordError(
+                        '',
+                      );
+                    }
                   }
-                }}
+                }
                 placeholder="Mot de passe"
                 placeholderTextColor="#555555"
                 secureTextEntry={
@@ -2579,7 +2572,8 @@ export default function LiveScreen() {
                 }
                 onPress={() =>
                   setShowAdultPassword(
-                    value => !value,
+                    value =>
+                      !value,
                   )
                 }
                 disabled={
@@ -2592,8 +2586,8 @@ export default function LiveScreen() {
                   }
                 >
                   {showAdultPassword
-                    ? '🙈'
-                    : '👁️'}
+                    ? '🔒'
+                    : '🔓'}
                 </Text>
               </Pressable>
             </View>
@@ -2604,7 +2598,9 @@ export default function LiveScreen() {
                   styles.passwordError
                 }
               >
-                {adultPasswordError}
+                {
+                  adultPasswordError
+                }
               </Text>
             ) : null}
 
@@ -2677,435 +2673,3 @@ export default function LiveScreen() {
     </View>
   );
 }
-
-
-
-/* ============================================================
-   STYLES
-============================================================ */
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#0B0B0B',
-  },
-
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingTop: 16,
-    paddingBottom: 12,
-  },
-
-  backButton: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: '#1A1A1A',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12,
-  },
-
-  backButtonText: {
-    color: '#FFFFFF',
-    fontSize: 34,
-    lineHeight: 38,
-    marginTop: -4,
-  },
-
-  headerTitleContainer: {
-    flex: 1,
-  },
-
-  title: {
-    color: '#FFFFFF',
-    fontSize: 24,
-    fontWeight: '700',
-  },
-
-  subtitle: {
-    color: '#888888',
-    fontSize: 13,
-    marginTop: 2,
-  },
-
-  categorySection: {
-    borderBottomWidth: 1,
-    borderBottomColor: '#202020',
-    marginBottom: 8,
-  },
-
-  categoryList: {
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-  },
-
-  categoryItem: {
-    backgroundColor: '#181818',
-    borderRadius: 8,
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-    marginHorizontal: 4,
-    maxWidth: 180,
-  },
-
-  categoryItemActive: {
-    backgroundColor: '#E50914',
-  },
-
-  categoryText: {
-    color: '#BBBBBB',
-    fontSize: 13,
-    fontWeight: '600',
-  },
-
-  categoryTextActive: {
-    color: '#FFFFFF',
-  },
-
-  channelsList: {
-    paddingHorizontal: 10,
-    paddingTop: 8,
-    paddingBottom: 30,
-  },
-
-  columnWrapper: {
-    justifyContent: 'space-between',
-  },
-
-  channelCard: {
-    width: '31.5%',
-    backgroundColor: '#151515',
-    borderRadius: 10,
-    marginBottom: 12,
-    padding: 8,
-    alignItems: 'center',
-  },
-
-  channelCardPressed: {
-    opacity: 0.7,
-  },
-
-  logoContainer: {
-    width: '100%',
-    height: 75,
-    borderRadius: 7,
-    backgroundColor: '#0F0F0F',
-    alignItems: 'center',
-    justifyContent: 'center',
-    overflow: 'hidden',
-  },
-
-  channelLogo: {
-    width: '90%',
-    height: '90%',
-  },
-
-  defaultLogo: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: '#222222',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
-  defaultLogoText: {
-    color: '#777777',
-    fontSize: 14,
-    fontWeight: '700',
-  },
-
-  channelName: {
-    color: '#FFFFFF',
-    fontSize: 12,
-    fontWeight: '600',
-    textAlign: 'center',
-    marginTop: 8,
-    minHeight: 30,
-  },
-
-  loadingContainer: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
-  loadingTitle: {
-    color: '#FFFFFF',
-    fontSize: 18,
-    fontWeight: '700',
-    marginTop: 18,
-    textAlign: 'center',
-  },
-
-  emptyContainer: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 30,
-  },
-
-  emptyIcon: {
-    fontSize: 42,
-    marginBottom: 12,
-  },
-
-  emptyTitle: {
-    color: '#FFFFFF',
-    fontSize: 18,
-    fontWeight: '700',
-    textAlign: 'center',
-  },
-
-  emptyText: {
-    color: '#777777',
-    fontSize: 13,
-    marginTop: 8,
-    textAlign: 'center',
-    lineHeight: 19,
-  },
-
-  subscriptionButton: {
-    height: 46,
-    paddingHorizontal: 22,
-    borderRadius: 12,
-    backgroundColor: '#E50914',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 18,
-  },
-
-  subscriptionButtonText: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: '800',
-  },
-
-  syncContainer: {
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    backgroundColor: '#111111',
-    borderBottomWidth: 1,
-    borderBottomColor: '#202020',
-  },
-
-  syncHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 7,
-  },
-
-  syncTitle: {
-    color: '#FFFFFF',
-    fontSize: 13,
-    fontWeight: '600',
-  },
-
-  syncPercent: {
-    color: '#E50914',
-    fontSize: 13,
-    fontWeight: '700',
-  },
-
-  progressBackground: {
-    height: 6,
-    width: '100%',
-    backgroundColor: '#292929',
-    borderRadius: 3,
-    overflow: 'hidden',
-  },
-
-  progressBar: {
-    height: '100%',
-    backgroundColor: '#E50914',
-    borderRadius: 3,
-  },
-
-  syncDetails: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginTop: 6,
-  },
-
-  syncCount: {
-    color: '#888888',
-    fontSize: 11,
-  },
-
-  syncPhase: {
-    color: '#666666',
-    fontSize: 11,
-  },
-
-  searchContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginHorizontal: 16,
-    marginBottom: 8,
-    paddingHorizontal: 12,
-    height: 46,
-    backgroundColor: '#181818',
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#252525',
-  },
-
-  searchInput: {
-    flex: 1,
-    color: '#FFFFFF',
-    fontSize: 14,
-    paddingVertical: 0,
-  },
-
-  clearSearch: {
-    width: 30,
-    height: 30,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
-  clearSearchText: {
-    color: '#888888',
-    fontSize: 25,
-    lineHeight: 28,
-  },
-
-  /* ==========================================================
-     MODALE MOT DE PASSE ADULTE
-  ========================================================== */
-
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.78)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 22,
-  },
-
-  passwordModal: {
-    width: '100%',
-    maxWidth: 390,
-    backgroundColor: '#151515',
-    borderRadius: 20,
-    padding: 22,
-    borderWidth: 1,
-    borderColor:
-      'rgba(255,255,255,0.08)',
-  },
-
-  passwordModalIcon: {
-    width: 56,
-    height: 56,
-    borderRadius: 18,
-    backgroundColor: '#0D0D0D',
-    alignItems: 'center',
-    justifyContent: 'center',
-    alignSelf: 'center',
-    marginBottom: 14,
-  },
-
-  passwordModalIconText: {
-    fontSize: 27,
-  },
-
-  passwordModalTitle: {
-    color: '#FFFFFF',
-    fontSize: 21,
-    fontWeight: '800',
-    textAlign: 'center',
-  },
-
-  passwordModalDescription: {
-    color: '#888888',
-    fontSize: 13,
-    lineHeight: 19,
-    textAlign: 'center',
-    marginTop: 8,
-    marginBottom: 18,
-  },
-
-  passwordModalInputContainer: {
-    minHeight: 50,
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#0D0D0D',
-    borderWidth: 1,
-    borderColor:
-      'rgba(255,255,255,0.09)',
-    borderRadius: 12,
-  },
-
-  passwordModalInput: {
-    flex: 1,
-    color: '#FFFFFF',
-    fontSize: 14,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-  },
-
-  passwordEyeButton: {
-    width: 46,
-    height: 48,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
-  passwordEyeText: {
-    fontSize: 18,
-  },
-
-  passwordError: {
-    color: '#FF5A60',
-    fontSize: 12,
-    fontWeight: '600',
-    marginTop: 8,
-    marginLeft: 2,
-  },
-
-  passwordSubmitButton: {
-    height: 48,
-    borderRadius: 12,
-    backgroundColor: '#E50914',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 18,
-  },
-
-  passwordSubmitButtonDisabled: {
-    opacity: 0.6,
-  },
-
-  passwordSubmitText: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: '800',
-  },
-
-  passwordLoadingContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
-  passwordLoadingText: {
-    marginLeft: 9,
-  },
-
-  passwordCancelButton: {
-    height: 44,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 4,
-  },
-
-  passwordCancelText: {
-    color: '#888888',
-    fontSize: 13,
-    fontWeight: '600',
-  },
-});

@@ -75,6 +75,113 @@ export type ChangePasswordResponse = {
   token: string;
 };
 
+
+export type RegisterResponse = {
+  success: boolean;
+  message: string;
+  token: string;
+  user: AuthUser;
+};
+
+export async function register(
+  username: string,
+  phone: string,
+  email: string,
+  password: string,
+): Promise<RegisterResponse> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/auth/register`,
+    {
+      method: 'POST',
+
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+
+      body: JSON.stringify({
+        username:
+          username.trim() || null,
+
+        phone:
+          phone.trim(),
+
+        email:
+          email.trim() || null,
+
+        password,
+      }),
+    }
+  );
+
+  const responseText =
+    await response.text();
+
+  console.log(
+    'RÉPONSE INSCRIPTION :',
+    response.status,
+    responseText
+  );
+
+  let data:
+    RegisterResponse & {
+      detail?: string;
+    };
+
+  try {
+    data =
+      JSON.parse(responseText);
+  } catch {
+    throw new Error(
+      'Réponse invalide du serveur.'
+    );
+  }
+
+  if (!response.ok) {
+    throw new Error(
+      data.detail ||
+        data.message ||
+        'Impossible de créer le compte.'
+    );
+  }
+
+  if (!data.success) {
+    throw new Error(
+      data.message ||
+        'Impossible de créer le compte.'
+    );
+  }
+
+  if (!data.token) {
+    throw new Error(
+      'Compte créé, mais aucun token de session n’a été reçu.'
+    );
+  }
+
+  if (!data.user) {
+    throw new Error(
+      'Compte créé, mais les informations utilisateur sont absentes.'
+    );
+  }
+
+  /*
+   * Le backend crée déjà la session.
+   *
+   * On sauvegarde donc immédiatement
+   * le token et l'utilisateur localement.
+   */
+  await saveAuthSession(
+    data.token,
+    data.user
+  );
+
+  return data;
+}
+
+
+
+
+
 export async function changePassword(
   currentPassword: string,
   newPassword: string,
@@ -220,3 +327,73 @@ export async function logout(): Promise<void> {
   }
 }
 
+
+
+export async function registerFCMToken(
+  fcmToken: string
+): Promise<boolean> {
+  try {
+    const authToken = await getAuthToken();
+
+    if (!authToken) {
+      console.log(
+        'NOTIFICATIONS : aucun token de session.'
+      );
+
+      return false;
+    }
+
+    console.log(
+      'NOTIFICATIONS : enregistrement du token FCM auprès de l API...'
+    );
+
+    const response = await fetch(
+      `${API_BASE_URL}/api/notifications/fcm-token`,
+      {
+        method: 'POST',
+
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}`,
+        },
+
+        body: JSON.stringify({
+          token: fcmToken,
+          platform: 'android',
+        }),
+      }
+    );
+
+    console.log(
+      'NOTIFICATIONS : HTTP enregistrement FCM :',
+      response.status
+    );
+
+    if (!response.ok) {
+      const errorText = await response.text();
+
+      console.log(
+        'NOTIFICATIONS : erreur serveur FCM :',
+        errorText
+      );
+
+      return false;
+    }
+
+    const data = await response.json();
+
+    console.log(
+      'NOTIFICATIONS : réponse serveur FCM :',
+      data
+    );
+
+    return true;
+  } catch (error) {
+    console.log(
+      'NOTIFICATIONS : erreur enregistrement FCM :',
+      error
+    );
+
+    return false;
+  }
+}

@@ -18,6 +18,11 @@ export type CreateOrderRequest = {
 
 export type Order = {
   id: number;
+
+  // Référence publique de la commande
+  // Exemple : SCORP-20260926-000123
+  order_reference: string | null;
+
   user_id: number;
   subscription_plan_id: number;
   amount: number;
@@ -44,12 +49,15 @@ export type CreateOrderResponse = {
   message: string;
   requires_extension_confirmation: boolean;
   purchase_type?: 'extension' | 'scheduled';
+
   order: Order;
+
   plan: {
     id: number;
     name: string;
     duration_months: number;
   };
+
   current_subscription?: CurrentSubscription;
 };
 
@@ -65,6 +73,7 @@ export type ConfirmExtensionResponse = {
   purchase_type?: 'extension' | 'scheduled';
   order_id: number;
   current_subscription?: CurrentSubscription;
+
   new_plan?: {
     id: number;
     name: string;
@@ -95,8 +104,14 @@ export type ConfirmPaymentResponse = {
   success: boolean;
   message: string;
   purchase_type: 'new' | 'extension' | 'scheduled';
+
   order: {
     id: number;
+
+    // Référence publique de la commande
+    // Exemple : SCORP-20260926-000123
+    order_reference: string | null;
+
     user_id: number;
     subscription_plan_id: number;
     amount: number;
@@ -106,6 +121,7 @@ export type ConfirmPaymentResponse = {
     extension_confirmed: boolean;
     transaction_id: string;
   };
+
   subscription: Subscription;
 };
 

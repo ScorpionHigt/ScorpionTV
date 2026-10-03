@@ -86,14 +86,6 @@ async function openDatabase() {
   ============================================================
   */
 
-  /*
-   * IMPORTANT :
-   * On ne supprime plus les tables Séries au démarrage.
-   *
-   * Les données Séries doivent rester en cache SQLite
-   * entre les différentes ouvertures de l'application.
-   */
-
   await db.execAsync(`
     CREATE TABLE IF NOT EXISTS series_categories (
       category_id TEXT PRIMARY KEY NOT NULL,
@@ -113,12 +105,53 @@ async function openDatabase() {
       release_date TEXT,
       rating TEXT,
       rating_5based REAL,
+      cover TEXT,
       backdrop_path TEXT,
       youtube_trailer TEXT,
       episode_run_time INTEGER,
       category_id TEXT
     );
   `);
+
+  /*
+  ============================================================
+  MIGRATION SÉRIES
+  ============================================================
+  *
+  * Les anciennes installations possèdent déjà la table
+  * "series" sans la colonne "cover".
+  *
+  * CREATE TABLE IF NOT EXISTS ne modifie pas une table
+  * existante.
+  *
+  * On vérifie donc explicitement si "cover" existe.
+  */
+
+  const seriesColumns =
+    await db.getAllAsync<{
+      name: string;
+    }>(
+      `
+      PRAGMA table_info(series);
+      `
+    );
+
+  const hasCoverColumn =
+    seriesColumns.some(
+      (column) =>
+        column.name === 'cover'
+    );
+
+  if (!hasCoverColumn) {
+    await db.execAsync(`
+      ALTER TABLE series
+      ADD COLUMN cover TEXT;
+    `);
+
+    console.log(
+      'SQLite SERIES : colonne cover ajoutée.'
+    );
+  }
 
   await db.execAsync(`
     CREATE TABLE IF NOT EXISTS series_episodes (
@@ -217,20 +250,6 @@ async function openDatabase() {
   ============================================================
   */
 
-  /*
-   * Cette table permet de savoir si la première
-   * synchronisation de chaque catalogue est terminée.
-   *
-   * Exemple :
-   *
-   * live    -> completed
-   * movies  -> completed
-   * series  -> pending
-   *
-   * Dans ce cas, seul le catalogue Séries devra encore
-   * passer par l'écran de première synchronisation.
-   */
-
   await db.execAsync(`
     CREATE TABLE IF NOT EXISTS catalog_sync_state (
       catalog TEXT PRIMARY KEY NOT NULL,
@@ -238,13 +257,6 @@ async function openDatabase() {
       updated_at TEXT
     );
   `);
-
-  /*
-   * Initialisation des trois catalogues.
-   *
-   * INSERT OR IGNORE permet de ne pas écraser l'état
-   * existant lors des prochains démarrages.
-   */
 
   await db.execAsync(`
     INSERT OR IGNORE INTO catalog_sync_state

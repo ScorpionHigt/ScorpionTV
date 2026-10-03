@@ -8,12 +8,12 @@ import {
   ActivityIndicator,
   Image,
   Pressable,
-  SafeAreaView,
   ScrollView,
-  StyleSheet,
   Text,
   View,
 } from 'react-native';
+import { seriesDetailStyles as styles } from '../../styles/seriesDetailStyles';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import {
   router,
@@ -37,10 +37,29 @@ type Season = {
   air_date?: string | null;
 };
 
+type XtreamEpisode = {
+  id: string | number;
+  season?: number;
+  episode_num?: number;
+  title: string;
+  container_extension?: string | null;
+  direct_source?: string | null;
+  added?: string | null;
+  custom_sid?: string | null;
+  info?: {
+    plot?: string | null;
+    rating?: string | null;
+    rating_5based?: number | null;
+    duration?: string | null;
+    duration_secs?: number | null;
+  };
+};
+
 export default function SeriesDetailsScreen() {
-  const { id } = useLocalSearchParams<{
-    id: string;
-  }>();
+  const { id } =
+    useLocalSearchParams<{
+      id: string;
+    }>();
 
   const [loading, setLoading] =
     useState(true);
@@ -60,6 +79,12 @@ export default function SeriesDetailsScreen() {
   const [episodes, setEpisodes] =
     useState<SeriesEpisode[]>([]);
 
+  const [allEpisodes, setAllEpisodes] =
+    useState<Record<
+      string,
+      XtreamEpisode[]
+    >>({});
+
   const [xtreamClient, setXtreamClient] =
     useState<XtreamClient | null>(null);
 
@@ -71,17 +96,23 @@ export default function SeriesDetailsScreen() {
         setLoading(true);
         setError(null);
 
+        console.log(
+          'SERIES DETAIL : début chargement'
+        );
+
         if (!id) {
           throw new Error(
             'Identifiant de série manquant.'
           );
         }
 
+        console.log(
+          'SERIES DETAIL : ID =',
+          id
+        );
+
         /*
          * Récupération de l'accès utilisateur.
-         *
-         * Le serveur Xtream n'est plus stocké
-         * directement dans l'application.
          */
         const access =
           await getUserAccess();
@@ -123,115 +154,113 @@ export default function SeriesDetailsScreen() {
 
         setXtreamClient(client);
 
-        /*
-         * Les informations de la série viennent
-         * du cache SQLite / Xtream via le repository.
-         */
+        console.log(
+          'SERIES DETAIL : récupération des informations...'
+        );
+
         const result =
-          await getSeriesInfo(Number(id));
+          await getSeriesInfo(
+            Number(id)
+          );
 
         if (!mounted) {
           return;
         }
 
+        console.log(
+          'SERIES DETAIL : informations reçues'
+        );
+
+        /*
+         * Informations générales.
+         */
         setSeriesInfo(
           result.info ?? null
         );
 
+        /*
+         * Saisons.
+         */
         const loadedSeasons =
           result.seasons ?? [];
+
+        console.log(
+          'SERIES DETAIL : saisons =',
+          loadedSeasons.length
+        );
 
         setSeasons(
           loadedSeasons
         );
 
+        /*
+         * Épisodes.
+         */
+        const loadedEpisodes =
+          (result.episodes ??
+            {}) as Record<
+            string,
+            XtreamEpisode[]
+          >;
+
+        setAllEpisodes(
+          loadedEpisodes
+        );
+
+        console.log(
+          'SERIES DETAIL : saisons avec épisodes =',
+          Object.keys(
+            loadedEpisodes
+          ).length
+        );
+
+        /*
+         * Première saison.
+         */
         if (
           loadedSeasons.length > 0
         ) {
-          setSelectedSeason(
+          const firstSeason =
             loadedSeasons[0]
-              .season_number
+              .season_number;
+
+          setSelectedSeason(
+            firstSeason
           );
-        }
 
-        const allEpisodes =
-          result.episodes ?? {};
-
-        const firstSeason =
-          loadedSeasons.length > 0
-            ? String(
-                loadedSeasons[0]
-                  .season_number
-              )
-            : null;
-
-        if (firstSeason) {
           const firstEpisodes =
-            allEpisodes[firstSeason] ?? [];
+            loadedEpisodes[
+              String(firstSeason)
+            ] ?? [];
+
+          console.log(
+            'SERIES DETAIL : épisodes première saison =',
+            firstEpisodes.length
+          );
 
           setEpisodes(
             firstEpisodes.map(
-              (episode) => ({
-                episode_id:
-                  Number(episode.id),
-
-                series_id:
+              episode =>
+                mapEpisode(
+                  episode,
                   Number(id),
-
-                season:
-                  episode.season ??
-                  Number(firstSeason),
-
-                episode:
-                  episode.episode_num,
-
-                title:
-                  episode.title,
-
-                container_extension:
-                  episode.container_extension,
-
-                plot:
-                  episode.info?.plot ??
-                  null,
-
-                rating:
-                  episode.info?.rating ??
-                  null,
-
-                rating_5based:
-                  episode.info
-                    ?.rating_5based ??
-                  null,
-
-                duration:
-                  episode.info?.duration ??
-                  null,
-
-                duration_seconds:
-                  episode.info
-                    ?.duration_secs ??
-                  null,
-
-                direct_source:
-                  episode.direct_source ??
-                  null,
-
-                added:
-                  episode.added ??
-                  null,
-
-                custom_sid:
-                  episode.custom_sid ??
-                  null,
-
-                episode_num:
-                  episode.episode_num,
-              })
+                  firstSeason
+                )
             )
           );
+        } else {
+          console.log(
+            'SERIES DETAIL : aucune saison'
+          );
+
+          setEpisodes([]);
         }
       } catch (err) {
+        console.error(
+          'ERREUR SERIES DETAIL :',
+          err
+        );
+
         if (!mounted) {
           return;
         }
@@ -255,100 +284,209 @@ export default function SeriesDetailsScreen() {
     };
   }, [id]);
 
+  /*
+   * Transforme un épisode Xtream
+   * en SeriesEpisode.
+   */
+  
+const mapEpisode = (
+  episode: XtreamEpisode,
+  seriesId: number,
+  seasonNumber: number
+): SeriesEpisode => {
+  return {
+    episode_id:
+      Number(episode.id),
+
+    series_id:
+      seriesId,
+
+    season:
+      episode.season ??
+      seasonNumber,
+
+    episode:
+      episode.episode_num ??
+      null,
+
+    title:
+      episode.title,
+
+    container_extension:
+      episode.container_extension ??
+      null,
+
+    plot:
+      episode.info?.plot ??
+      null,
+
+    rating:
+      episode.info?.rating ??
+      null,
+
+    rating_5based:
+      episode.info
+        ?.rating_5based ??
+      null,
+
+    duration:
+      episode.info?.duration ??
+      null,
+
+    duration_seconds:
+      episode.info
+        ?.duration_secs ??
+      null,
+
+    direct_source:
+      episode.direct_source ??
+      null,
+
+    added:
+      episode.added ??
+      null,
+
+    custom_sid:
+      episode.custom_sid ??
+      null,
+
+    episode_num:
+      episode.episode_num ??
+      null,
+  };
+};
+
+
+
+  /*
+   * Épisodes de la saison sélectionnée.
+   */
   const selectedSeasonEpisodes =
     useMemo(() => {
       if (
-        !selectedSeason ||
-        !seriesInfo
+        selectedSeason === null
       ) {
-        return episodes;
+        return [];
       }
 
       return episodes;
     }, [
       selectedSeason,
-      seriesInfo,
       episodes,
     ]);
 
+  /*
+   * Changement de saison.
+   */
   const handleSeason = (
     seasonNumber: number
   ) => {
-    setSelectedSeason(
+    console.log(
+      'SERIES DETAIL : changement saison =',
       seasonNumber
     );
 
-    const allEpisodes =
-      seriesInfo?.episodes ?? {};
+    setSelectedSeason(
+      seasonNumber
+    );
 
     const seasonEpisodes =
       allEpisodes[
         String(seasonNumber)
       ] ?? [];
 
+    console.log(
+      'SERIES DETAIL : épisodes saison',
+      seasonNumber,
+      '=',
+      seasonEpisodes.length
+    );
+
     setEpisodes(
       seasonEpisodes.map(
-        (episode: any) => ({
-          episode_id:
-            Number(episode.id),
-
-          series_id:
+        episode =>
+          mapEpisode(
+            episode,
             Number(id),
-
-          season:
-            episode.season ??
-            seasonNumber,
-
-          episode:
-            episode.episode_num,
-
-          title:
-            episode.title,
-
-          container_extension:
-            episode.container_extension,
-
-          plot:
-            episode.info?.plot ??
-            null,
-
-          rating:
-            episode.info?.rating ??
-            null,
-
-          rating_5based:
-            episode.info
-              ?.rating_5based ??
-            null,
-
-          duration:
-            episode.info?.duration ??
-            null,
-
-          duration_seconds:
-            episode.info
-              ?.duration_secs ??
-            null,
-
-          direct_source:
-            episode.direct_source ??
-            null,
-
-          added:
-            episode.added ??
-            null,
-
-          custom_sid:
-            episode.custom_sid ??
-            null,
-
-          episode_num:
-            episode.episode_num,
-        })
+            seasonNumber
+          )
       )
     );
   };
 
+  /*
+   * Lecture d'un épisode.
+   */
+  const handlePlayEpisode = (
+    episode: SeriesEpisode
+  ) => {
+    if (!episode.episode_id) {
+      console.error(
+        'SERIES PLAY : episode_id manquant'
+      );
+
+      return;
+    }
+
+    const extension =
+      episode.container_extension ||
+      'mp4';
+
+    let episodeUrl =
+      episode.direct_source ||
+      '';
+
+    /*
+     * Si Xtream ne fournit pas de
+     * direct_source, on construit
+     * l'URL avec le client Xtream.
+     */
+    if (
+      !episodeUrl &&
+      xtreamClient
+    ) {
+      episodeUrl =
+        xtreamClient.getSeriesEpisodeUrl(
+          episode.episode_id,
+          extension
+        );
+    }
+
+    console.log(
+      'SERIES PLAY : episode =',
+      episode.episode_id
+    );
+
+    console.log(
+      'SERIES PLAY : extension =',
+      extension
+    );
+
+    console.log(
+      'SERIES PLAY : URL =',
+      episodeUrl
+    );
+
+    if (!episodeUrl) {
+      console.error(
+        'SERIES PLAY : URL épisode introuvable'
+      );
+
+      return;
+    }
+
+    router.push({
+      pathname: '/player',
+      params: {
+        url: episodeUrl,
+       title: (seriesInfo?.name ?? 'Série') + ' - ' + episode.title,
+      },
+    });
+  };
+
+  /*
+    Chargement.
+   */
   if (loading) {
     return (
       <SafeAreaView
@@ -369,6 +507,10 @@ export default function SeriesDetailsScreen() {
     );
   }
 
+  /*
+   * Erreur.
+   */
+
   if (error) {
     return (
       <SafeAreaView
@@ -386,9 +528,7 @@ export default function SeriesDetailsScreen() {
             }
           >
             <Text
-              style={
-                styles.backButtonText
-              }
+              style={styles.backButtonText }
             >
               Retour
             </Text>
@@ -398,6 +538,9 @@ export default function SeriesDetailsScreen() {
     );
   }
 
+  /*
+   * Série introuvable.
+   */
   if (!seriesInfo) {
     return (
       <SafeAreaView
@@ -439,18 +582,21 @@ export default function SeriesDetailsScreen() {
           styles.content
         }
       >
+        {/* BARRE SUPÉRIEURE */}
         <View style={styles.topBar}>
           <Pressable
+            style={styles.backBut}
             onPress={() =>
               router.back()
             }
           >
-            <Text style={styles.back}>
-              ← Retour
+            <Text style={styles.backButText}>
+              ‹
             </Text>
           </Pressable>
         </View>
 
+        {/* INFORMATIONS SÉRIE */}
         <View style={styles.hero}>
           {poster ? (
             <Image
@@ -458,6 +604,7 @@ export default function SeriesDetailsScreen() {
                 uri: poster,
               }}
               style={styles.poster}
+              resizeMode="cover"
             />
           ) : (
             <View
@@ -509,6 +656,7 @@ export default function SeriesDetailsScreen() {
           </View>
         </View>
 
+        {/* SYNOPSIS */}
         {seriesInfo.plot ? (
           <View style={styles.section}>
             <Text
@@ -525,6 +673,7 @@ export default function SeriesDetailsScreen() {
           </View>
         ) : null}
 
+        {/* ACTEURS */}
         {seriesInfo.cast ? (
           <View style={styles.section}>
             <Text
@@ -541,6 +690,7 @@ export default function SeriesDetailsScreen() {
           </View>
         ) : null}
 
+        {/* SAISONS */}
         <View style={styles.section}>
           <Text
             style={styles.sectionTitle}
@@ -558,7 +708,7 @@ export default function SeriesDetailsScreen() {
             }
           >
             {seasons.map(
-              (season) => (
+              season => (
                 <Pressable
                   key={
                     season.season_number
@@ -613,6 +763,7 @@ export default function SeriesDetailsScreen() {
           </ScrollView>
         </View>
 
+        {/* ÉPISODES */}
         <View style={styles.section}>
           <Text
             style={styles.sectionTitle}
@@ -631,46 +782,13 @@ export default function SeriesDetailsScreen() {
                 <Pressable
                   key={`${episode.episode_id}-${index}`}
                   style={styles.episode}
-                  onPress={() => {
-                    if (
-                      !episode.episode_id
-                    ) {
-                      return;
-                    }
-
-                    const extension =
-                      episode.container_extension ||
-                      'mp4';
-
-                    let episodeUrl =
-                      episode.direct_source ||
-                      '';
-
-                    if (
-                      !episodeUrl &&
-                      xtreamClient
-                    ) {
-                      episodeUrl =
-                        xtreamClient.getSeriesEpisodeUrl(
-                          episode.episode_id,
-                          extension
-                        );
-                    }
-
-                    if (!episodeUrl) {
-                      return;
-                    }
-
-                    router.push({
-                      pathname:
-                        '/player',
-                      params: {
-                        url: episodeUrl,
-                        title: `${seriesInfo.name} - ${episode.title}`,
-                      },
-                    });
-                  }}
+                  onPress={() =>
+                    handlePlayEpisode(
+                      episode
+                    )
+                  }
                 >
+                  {/* NUMÉRO */}
                   <View
                     style={
                       styles.episodeNumber
@@ -686,6 +804,7 @@ export default function SeriesDetailsScreen() {
                     </Text>
                   </View>
 
+                  {/* INFORMATIONS */}
                   <View
                     style={
                       styles.episodeInfo
@@ -722,13 +841,20 @@ export default function SeriesDetailsScreen() {
                     ) : null}
                   </View>
 
-                  <Text
+                  {/* BOUTON PLAY */}
+                  <View
                     style={
-                      styles.playIcon
+                      styles.playButton
                     }
                   >
-                    ▶
-                  </Text>
+                    <Text
+                      style={
+                        styles.playButtonText
+                      }
+                    >
+                      ▶
+                    </Text>
+                  </View>
                 </Pressable>
               )
             )
@@ -738,223 +864,3 @@ export default function SeriesDetailsScreen() {
     </SafeAreaView>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#0b0b0b',
-  },
-
-  content: {
-    paddingBottom: 40,
-  },
-
-  topBar: {
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-  },
-
-  back: {
-    color: '#ffffff',
-    fontSize: 16,
-  },
-
-  hero: {
-    flexDirection: 'row',
-    paddingHorizontal: 16,
-    marginTop: 4,
-  },
-
-  poster: {
-    width: 130,
-    height: 190,
-    borderRadius: 10,
-    backgroundColor: '#191919',
-  },
-
-  posterPlaceholder: {
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
-  placeholderText: {
-    color: '#666666',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-
-  heroInfo: {
-    flex: 1,
-    marginLeft: 16,
-    justifyContent: 'center',
-  },
-
-  title: {
-    color: '#ffffff',
-    fontSize: 24,
-    fontWeight: '700',
-  },
-
-  rating: {
-    color: '#f5c542',
-    fontSize: 15,
-    marginTop: 10,
-  },
-
-  genre: {
-    color: '#bbbbbb',
-    fontSize: 14,
-    marginTop: 10,
-  },
-
-  meta: {
-    color: '#888888',
-    fontSize: 13,
-    marginTop: 7,
-  },
-
-  section: {
-    marginTop: 24,
-    paddingHorizontal: 16,
-  },
-
-  sectionTitle: {
-    color: '#ffffff',
-    fontSize: 20,
-    fontWeight: '700',
-    marginBottom: 12,
-  },
-
-  plot: {
-    color: '#cccccc',
-    fontSize: 14,
-    lineHeight: 21,
-  },
-
-  seasons: {
-    paddingRight: 16,
-  },
-
-  season: {
-    minWidth: 110,
-    paddingHorizontal: 14,
-    paddingVertical: 11,
-    marginRight: 8,
-    borderRadius: 10,
-    backgroundColor: '#1b1b1b',
-  },
-
-  seasonActive: {
-    backgroundColor: '#ffffff',
-  },
-
-  seasonText: {
-    color: '#bbbbbb',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-
-  seasonTextActive: {
-    color: '#000000',
-  },
-
-  episodeCount: {
-    color: '#777777',
-    fontSize: 11,
-    marginTop: 4,
-  },
-
-  episodeCountActive: {
-    color: '#555555',
-  },
-
-  episode: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: '#202020',
-  },
-
-  episodeNumber: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#1d1d1d',
-  },
-
-  episodeNumberText: {
-    color: '#ffffff',
-    fontSize: 14,
-    fontWeight: '700',
-  },
-
-  episodeInfo: {
-    flex: 1,
-    marginLeft: 12,
-    marginRight: 10,
-  },
-
-  episodeTitle: {
-    color: '#ffffff',
-    fontSize: 15,
-    fontWeight: '600',
-  },
-
-  duration: {
-    color: '#888888',
-    fontSize: 11,
-    marginTop: 4,
-  },
-
-  episodePlot: {
-    color: '#777777',
-    fontSize: 12,
-    marginTop: 5,
-    lineHeight: 17,
-  },
-
-  playIcon: {
-    color: '#ffffff',
-    fontSize: 18,
-    paddingHorizontal: 8,
-  },
-
-  empty: {
-    color: '#777777',
-    fontSize: 14,
-  },
-
-  center: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 30,
-  },
-
-  loadingText: {
-    color: '#ffffff',
-    marginTop: 12,
-  },
-
-  error: {
-    color: '#ff7777',
-    textAlign: 'center',
-    fontSize: 15,
-  },
-
-  backButton: {
-    marginTop: 20,
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 8,
-    backgroundColor: '#ffffff',
-  },
-
-  backButtonText: {
-    color: '#000000',
-    fontWeight: '600',
-  },
-});

@@ -25,6 +25,7 @@ export type Series = {
   release_date: string | null;
   rating: string | null;
   rating_5based: number | null;
+  cover: string | null;
   backdrop_path: string | null;
   youtube_trailer: string | null;
   episode_run_time: number | null;
@@ -178,6 +179,7 @@ type SeriesSignatureData = {
   release_date?: string | null;
   rating?: string | null;
   rating_5based?: number | null;
+  cover?: string | null;
   backdrop_path?:
     | string[]
     | string
@@ -206,6 +208,7 @@ function getSeriesSignature(
       null,
     series.rating ?? null,
     series.rating_5based ?? null,
+    series.cover ?? null,
     backdropPath,
     series.youtube_trailer ?? null,
     series.episode_run_time ?? null,
@@ -229,7 +232,8 @@ export async function syncSeriesCategories(
   let allowAdult = adultAccess;
 
   if (!xtreamClient) {
-    const access = await getSeriesXtreamClient();
+    const access =
+      await getSeriesXtreamClient();
 
     xtreamClient = access.client;
     allowAdult = access.adultAccess;
@@ -261,112 +265,108 @@ export async function syncSeriesCategories(
 
   const allowedCategoryIds = new Set(
     categories.map(
-      (category) => category.category_id
+      (category) =>
+        category.category_id
     )
   );
 
   let deleted = 0;
 
-  await db.withTransactionAsync(async () => {
-    /*
-    ========================================================
-    AJOUT / MISE À JOUR DES CATÉGORIES
-    ========================================================
-    */
+  await db.withTransactionAsync(
+    async () => {
+      /*
+      ========================================================
+      AJOUT / MISE À JOUR DES CATÉGORIES
+      ========================================================
+      */
 
-    for (const category of categories) {
-      const existing =
-        await db.getFirstAsync<{
+      for (const category of categories) {
+        const existing =
+          await db.getFirstAsync<{
+            category_id: string;
+          }>(
+            `
+            SELECT category_id
+            FROM series_categories
+            WHERE category_id = ?
+            LIMIT 1;
+            `,
+            category.category_id
+          );
+
+        if (existing) {
+          await db.runAsync(
+            `
+            UPDATE series_categories
+            SET
+              category_name = ?,
+              parent_id = ?
+            WHERE category_id = ?;
+            `,
+            category.category_name,
+            category.parent_id ?? 0,
+            category.category_id
+          );
+        } else {
+          await db.runAsync(
+            `
+            INSERT INTO series_categories (
+              category_id,
+              category_name,
+              parent_id
+            )
+            VALUES (?, ?, ?);
+            `,
+            category.category_id,
+            category.category_name,
+            category.parent_id ?? 0
+          );
+        }
+      }
+
+      /*
+      ========================================================
+      SUPPRESSION DES CATÉGORIES DISPARUES
+      ========================================================
+      */
+
+      const localCategories =
+        await db.getAllAsync<{
           category_id: string;
         }>(
           `
           SELECT category_id
-          FROM series_categories
-          WHERE category_id = ?
-          LIMIT 1;
-          `,
-          category.category_id
+          FROM series_categories;
+          `
         );
 
-      if (existing) {
-        await db.runAsync(
-          `
-          UPDATE series_categories
-          SET
-            category_name = ?,
-            parent_id = ?
-          WHERE category_id = ?;
-          `,
-          category.category_name,
-          category.parent_id ?? 0,
-          category.category_id
-        );
-      } else {
-        await db.runAsync(
-          `
-          INSERT INTO series_categories (
-            category_id,
-            category_name,
-            parent_id
+      for (const localCategory of localCategories) {
+        if (
+          !allowedCategoryIds.has(
+            localCategory.category_id
           )
-          VALUES (?, ?, ?);
-          `,
-          category.category_id,
-          category.category_name,
-          category.parent_id ?? 0
-        );
+        ) {
+          await db.runAsync(
+            `
+            DELETE FROM series
+            WHERE category_id = ?;
+            `,
+            localCategory.category_id
+          );
+
+          await db.runAsync(
+            `
+            DELETE FROM series_categories
+            WHERE category_id = ?;
+            `,
+            localCategory.category_id
+          );
+
+          deleted++;
+        }
       }
     }
-
-    /*
-    ========================================================
-    SUPPRESSION DES CATÉGORIES DISPARUES / NON AUTORISÉES
-    ========================================================
-    */
-
-    const localCategories =
-      await db.getAllAsync<{
-        category_id: string;
-      }>(
-        `
-        SELECT category_id
-        FROM series_categories;
-        `
-      );
-
-    for (const localCategory of localCategories) {
-      if (
-        !allowedCategoryIds.has(
-          localCategory.category_id
-        )
-      ) {
-        /*
-        Supprimer d'abord les séries
-        appartenant à cette catégorie.
-        */
-        await db.runAsync(
-          `
-          DELETE FROM series
-          WHERE category_id = ?;
-          `,
-          localCategory.category_id
-        );
-
-        /*
-        Puis supprimer la catégorie.
-        */
-        await db.runAsync(
-          `
-          DELETE FROM series_categories
-          WHERE category_id = ?;
-          `,
-          localCategory.category_id
-        );
-
-        deleted++;
-      }
-    }
-  });
+  );
 
   console.log(
     'CATÉGORIES SERIES SUPPRIMÉES :',
@@ -438,6 +438,7 @@ export async function syncSeries(
         release_date,
         rating,
         rating_5based,
+        cover,
         backdrop_path,
         youtube_trailer,
         episode_run_time,
@@ -634,6 +635,9 @@ export async function syncSeries(
         : series.backdrop_path ??
           null;
 
+    const cover =
+      series.cover ?? null;
+
     /*
     --------------------------------------------------------
     | NOUVELLE SÉRIE
@@ -653,13 +657,14 @@ export async function syncSeries(
           release_date,
           rating,
           rating_5based,
+          cover,
           backdrop_path,
           youtube_trailer,
           episode_run_time,
           category_id
         )
         VALUES (
-          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
         );
         `,
         series.series_id,
@@ -671,6 +676,7 @@ export async function syncSeries(
         series.releaseDate ?? null,
         series.rating ?? null,
         series.rating_5based ?? null,
+        cover,
         backdropPath,
         series.youtube_trailer ?? null,
         series.episode_run_time ?? null,
@@ -711,6 +717,7 @@ export async function syncSeries(
             release_date = ?,
             rating = ?,
             rating_5based = ?,
+            cover = ?,
             backdrop_path = ?,
             youtube_trailer = ?,
             episode_run_time = ?,
@@ -725,6 +732,7 @@ export async function syncSeries(
           series.releaseDate ?? null,
           series.rating ?? null,
           series.rating_5based ?? null,
+          cover,
           backdropPath,
           series.youtube_trailer ?? null,
           series.episode_run_time ?? null,
@@ -1006,6 +1014,7 @@ export async function getSeriesFromDatabase(
         release_date,
         rating,
         rating_5based,
+        cover,
         backdrop_path,
         youtube_trailer,
         episode_run_time,
@@ -1037,6 +1046,7 @@ export async function getSeriesFromDatabase(
       release_date,
       rating,
       rating_5based,
+      cover,
       backdrop_path,
       youtube_trailer,
       episode_run_time,
@@ -1083,6 +1093,7 @@ export async function searchSeriesFromDatabase(
         release_date,
         rating,
         rating_5based,
+        cover,
         backdrop_path,
         youtube_trailer,
         episode_run_time,
@@ -1112,6 +1123,7 @@ export async function searchSeriesFromDatabase(
       release_date,
       rating,
       rating_5based,
+      cover,
       backdrop_path,
       youtube_trailer,
       episode_run_time,
@@ -1177,9 +1189,9 @@ export async function getSearchSeriesCountFromDatabase(
       searchTerm
     );
 
-    return Number(
-      result?.count ?? 0
-    );
+  return Number(
+    result?.count ?? 0
+  );
 }
 
 /*
@@ -1187,19 +1199,52 @@ export async function getSearchSeriesCountFromDatabase(
 INFORMATIONS DÉTAILLÉES
 ============================================================
 */
-
 export async function getSeriesInfo(
   seriesId: number
 ): Promise<XtreamSeriesInfo> {
-  const {
-    client,
-  } = await getSeriesXtreamClient();
+  const db = await initDatabase();
+  const { client } = await getSeriesXtreamClient();
 
-  return await client.getSeriesInfo(
+  console.log(
+    'SERIES INFO : récupération Xtream, ID =',
+    seriesId
+  );
+
+  const result = await client.getSeriesInfo(
     String(seriesId)
   );
-}
 
+  console.log(
+    'SERIES INFO : saisons reçues =',
+    result.seasons?.length ?? 0
+  );
+
+  console.log(
+    'SERIES INFO : groupes d’épisodes =',
+    Object.keys(result.episodes ?? {}).length
+  );
+
+  const episodeCount = Object.values(
+    result.episodes ?? {}
+  ).reduce(
+    (total, list) => total + list.length,
+    0
+  );
+
+  console.log(
+    'SERIES INFO : épisodes reçus =',
+    episodeCount
+  );
+
+  await saveSeriesEpisodes(seriesId, result);
+
+  console.log(
+    'SERIES INFO : épisodes enregistrés =',
+    episodeCount
+  );
+
+  return result;
+}
 /*
 ============================================================
 ÉPISODES
@@ -1214,98 +1259,101 @@ export async function saveSeriesEpisodes(
 
   let inserted = 0;
 
-  await db.withTransactionAsync(async () => {
-    await db.runAsync(
-      `
-      DELETE FROM series_episodes
-      WHERE series_id = ?;
-      `,
-      seriesId
-    );
+  await db.withTransactionAsync(
+    async () => {
+      await db.runAsync(
+        `
+        DELETE FROM series_episodes
+        WHERE series_id = ?;
+        `,
+        seriesId
+      );
 
-    const episodes =
-      info.episodes ?? {};
-
-    for (
-      const seasonKey of Object.keys(
-        episodes
-      )
-    ) {
-      const seasonEpisodes =
-        episodes[seasonKey] ?? [];
+      const episodes =
+        info.episodes ?? {};
 
       for (
-        const episode of seasonEpisodes
+        const seasonKey of Object.keys(
+          episodes
+        )
       ) {
-        const episodeId =
-          Number(episode.id);
+        const seasonEpisodes =
+          episodes[seasonKey] ?? [];
 
-        if (
-          !Number.isFinite(
-            episodeId
-          )
+        for (
+          const episode of seasonEpisodes
         ) {
-          continue;
-        }
+          const episodeId =
+            Number(episode.id);
 
-        await db.runAsync(
-          `
-          INSERT OR REPLACE INTO series_episodes (
-            episode_id,
-            series_id,
-            season,
-            episode,
-            title,
-            container_extension,
-            plot,
-            rating,
-            rating_5based,
-            duration,
-            duration_seconds,
-            direct_source,
-            added,
-            custom_sid,
-            episode_num
-          )
-          VALUES (
-            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+          if (
+            !Number.isFinite(
+              episodeId
+            )
+          ) {
+            continue;
+          }
+
+          await db.runAsync(
+            `
+            INSERT OR REPLACE INTO series_episodes (
+              episode_id,
+              series_id,
+              season,
+              episode,
+              title,
+              container_extension,
+              plot,
+              rating,
+              rating_5based,
+              duration,
+              duration_seconds,
+              direct_source,
+              added,
+              custom_sid,
+              episode_num
+            )
+            VALUES (
+              ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            );
+            `,
+            episodeId,
+            seriesId,
+            episode.season ??
+              (Number.isFinite(Number(seasonKey))
+              ? Number(seasonKey)
+              : null),
+            episode.episode_num ??
+              null,
+            episode.title ??
+              null,
+            episode.container_extension ??
+              null,
+            episode.info?.plot ??
+              null,
+            episode.info?.rating ??
+              null,
+            episode.info?.rating_5based ??
+              null,
+            episode.info?.duration ??
+              null,
+            episode.info?.duration_secs ??
+              null,
+            episode.direct_source ??
+              null,
+            episode.added ??
+              null,
+            episode.custom_sid ??
+              null,
+            episode.episode_num ??
+              null
           );
-          `,
-          episodeId,
-          seriesId,
-          episode.season ??
-            Number(seasonKey) ??
-            null,
-          episode.episode_num ??
-            null,
-          episode.title ??
-            null,
-          episode.container_extension ??
-            null,
-          episode.info?.plot ??
-            null,
-          episode.info?.rating ??
-            null,
-          episode.info?.rating_5based ??
-            null,
-          episode.info?.duration ??
-            null,
-          episode.info?.duration_secs ??
-            null,
-          episode.direct_source ??
-            null,
-          episode.added ??
-            null,
-          episode.custom_sid ??
-            null,
-          episode.episode_num ??
-            null
-        );
 
-        inserted++;
+          inserted++;
+        }
       }
     }
-  });
+  );
 
   return inserted;
 }

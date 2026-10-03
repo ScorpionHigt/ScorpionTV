@@ -56,5 +56,11 @@ node_modules/
 # Fichiers temporaires
 *.log
 
-
+# Fichiers locaux et temporaires
+/google-services.json
+/android_old/
+/npx
+/logcat.txt
+/assets/images/icone_backup/
+*.backup
 

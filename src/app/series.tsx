@@ -1,6 +1,8 @@
 ﻿import React, {
+  memo,
   useCallback,
   useEffect,
+  useRef,
   useState,
 } from 'react';
 
@@ -9,14 +11,15 @@ import {
   FlatList,
   Image,
   Pressable,
-  SafeAreaView,
-  StyleSheet,
   Text,
   TextInput,
   View,
 } from 'react-native';
 
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
+
+import { seriesStyles as styles } from '../styles/seriesStyles';
 
 import {
   getSeriesCategoriesFromDatabase,
@@ -27,9 +30,204 @@ import {
   syncSeriesTV,
   Series,
   SeriesCategory,
+  SeriesSyncProgress,
 } from '../database/seriesRepository';
 
 const PAGE_SIZE = 100;
+
+/*
+============================================================
+IMAGE PAR DÉFAUT
+============================================================
+*/
+
+const DEFAULT_SERIES_IMAGE =
+  require('../assets/icon.png');
+
+/*
+============================================================
+TYPE CARTE SÉRIE
+============================================================
+*/
+
+type SeriesCardProps = {
+  item: Series;
+  imageFailed: boolean;
+  onImageError: (seriesId: number) => void;
+  onPress: (seriesId: number) => void;
+};
+
+/*
+============================================================
+RÉCUPÉRATION IMAGE SÉRIE
+============================================================
+*
+* Priorité :
+*
+* 1. cover
+* 2. backdrop_path
+* 3. image par défaut
+*
+============================================================
+*/
+
+const getSeriesImage = (
+  item: Series
+): string | null => {
+  /*
+  ----------------------------------------------------------
+  PRIORITÉ 1 : COVER
+  ----------------------------------------------------------
+  */
+
+  if (
+    item.cover &&
+    item.cover.trim() !== ''
+  ) {
+    return item.cover.trim();
+  }
+
+  /*
+  ----------------------------------------------------------
+  PRIORITÉ 2 : BACKDROP
+  ----------------------------------------------------------
+  */
+
+  if (item.backdrop_path) {
+    try {
+      const paths =
+        JSON.parse(
+          item.backdrop_path
+        );
+
+      if (
+        Array.isArray(paths) &&
+        paths.length > 0 &&
+        typeof paths[0] === 'string' &&
+        paths[0].trim() !== ''
+      ) {
+        return paths[0].trim();
+      }
+
+      if (
+        typeof paths === 'string' &&
+        paths.trim() !== ''
+      ) {
+        return paths.trim();
+      }
+    } catch {
+      /*
+      * Certains serveurs peuvent retourner
+      * directement une URL.
+      */
+
+      if (
+        item.backdrop_path.startsWith(
+          'http'
+        )
+      ) {
+        return item.backdrop_path;
+      }
+    }
+  }
+
+  return null;
+};
+
+/*
+============================================================
+CARTE SÉRIE
+============================================================
+*/
+
+const SeriesCard = memo(
+  ({
+    item,
+    imageFailed,
+    onImageError,
+    onPress,
+  }: SeriesCardProps) => {
+    const image =
+      getSeriesImage(item);
+
+    return (
+      <Pressable
+        style={({ pressed }) => [
+          styles.seriesCard,
+          pressed &&
+            styles.seriesCardPressed,
+        ]}
+        onPress={() =>
+          onPress(item.series_id)
+        }
+      >
+        <View
+          style={styles.posterContainer}
+        >
+          {!imageFailed && image ? (
+            <Image
+              source={{
+                uri: image,
+              }}
+              style={styles.poster}
+              resizeMode="cover"
+              onError={event => {
+                console.log(
+                  'SERIES IMAGE : erreur chargement =',
+                  item.name,
+                  image,
+                  event.nativeEvent.error
+                );
+
+                onImageError(
+                  item.series_id
+                );
+              }}
+            />
+          ) : (
+            <Image
+              source={
+                DEFAULT_SERIES_IMAGE
+              }
+              style={styles.poster}
+              resizeMode="cover"
+            />
+          )}
+
+          {item.rating ? (
+            <View
+              style={styles.ratingBadge}
+            >
+              <Text
+                style={
+                  styles.ratingText
+                }
+              >
+                ★ {item.rating}
+              </Text>
+            </View>
+          ) : null}
+        </View>
+
+        <Text
+          style={styles.seriesTitle}
+          numberOfLines={2}
+        >
+          {item.name}
+        </Text>
+      </Pressable>
+    );
+  }
+);
+
+SeriesCard.displayName =
+  'SeriesCard';
+
+/*
+============================================================
+ÉCRAN SÉRIES
+============================================================
+*/
 
 export default function SeriesScreen() {
   const [categories, setCategories] =
@@ -44,6 +242,9 @@ export default function SeriesScreen() {
   const [search, setSearch] =
     useState('');
 
+  const [failedImages, setFailedImages] =
+    useState<number[]>([]);
+
   const [loading, setLoading] =
     useState(true);
 
@@ -56,339 +257,920 @@ export default function SeriesScreen() {
   const [offset, setOffset] =
     useState(0);
 
-  const loadCategories = useCallback(async () => {
-    const result =
-      await getSeriesCategoriesFromDatabase();
+  const [error, setError] =
+    useState<string | null>(null);
 
-    setCategories(result);
-  }, []);
+  const [syncProgress, setSyncProgress] =
+    useState<SeriesSyncProgress | null>(
+      null
+    );
 
-  const loadSeries = useCallback(
-    async (
-      categoryId: string,
-      reset = true
-    ) => {
-      const currentOffset = reset ? 0 : offset;
+  /*
+  * Empêche plusieurs synchronisations
+  * simultanées.
+  */
 
-      const [result, count] =
-        await Promise.all([
+  const syncRunningRef =
+    useRef(false);
+
+  /*
+  * Empêche plusieurs chargements
+  * de pagination simultanés.
+  */
+
+  const loadingMoreRef =
+    useRef(false);
+
+  /*
+  ============================================================
+  CHARGEMENT CATÉGORIES
+  ============================================================
+  */
+
+  const loadCategories =
+    useCallback(async () => {
+      console.log(
+        'SERIES : chargement catégories SQLite...'
+      );
+
+      const result =
+        await getSeriesCategoriesFromDatabase();
+
+      console.log(
+        'SERIES : catégories SQLite :',
+        result.length
+      );
+
+      setCategories(result);
+    }, []);
+
+  /*
+  ============================================================
+  CHARGEMENT SÉRIES
+  ============================================================
+  */
+
+  const loadSeries =
+    useCallback(
+      async (
+        categoryId: string,
+        reset = true
+      ) => {
+        const currentOffset =
+          reset ? 0 : offset;
+
+        console.log(
+          'SERIES : loadSeries',
+          'category =',
+          categoryId,
+          'offset =',
+          currentOffset
+        );
+
+        const [
+          result,
+          count,
+        ] = await Promise.all([
           getSeriesFromDatabase(
             categoryId,
             PAGE_SIZE,
             currentOffset
           ),
+
           getSeriesCountFromDatabase(
             categoryId
           ),
         ]);
 
-      if (reset) {
-        setSeries(result);
-        setOffset(PAGE_SIZE);
-      } else {
-        setSeries(previous => [
-          ...previous,
-          ...result.filter(
-            item =>
-              !previous.some(
-                existing =>
-                  existing.series_id ===
-                  item.series_id
-              )
+        console.log(
+          'SERIES : séries récupérées SQLite =',
+          result.length,
+          '/',
+          count
+        );
+
+        if (reset) {
+          setSeries(result);
+          setOffset(PAGE_SIZE);
+          setFailedImages([]);
+        } else {
+          setSeries(previous => {
+            const existingIds =
+              new Set(
+                previous.map(
+                  item =>
+                    item.series_id
+                )
+              );
+
+            const newSeries =
+              result.filter(
+                item =>
+                  !existingIds.has(
+                    item.series_id
+                  )
+              );
+
+            return [
+              ...previous,
+              ...newSeries,
+            ];
+          });
+
+          setOffset(
+            currentOffset +
+              PAGE_SIZE
+          );
+        }
+
+        setTotal(count);
+      },
+      [offset]
+    );
+
+  /*
+  ============================================================
+  RECHERCHE
+  ============================================================
+  */
+
+  const searchSeries =
+    useCallback(
+      async (text: string) => {
+        const term =
+          text.trim();
+
+        if (!term) {
+          await loadSeries(
+            activeCategory,
+            true
+          );
+
+          return;
+        }
+
+        console.log(
+          'SERIES : recherche =',
+          term
+        );
+
+        try {
+          const [
+            result,
+            count,
+          ] = await Promise.all([
+            searchSeriesFromDatabase(
+              term,
+              activeCategory,
+              PAGE_SIZE,
+              0
+            ),
+
+            getSearchSeriesCountFromDatabase(
+              term,
+              activeCategory
+            ),
+          ]);
+
+          console.log(
+            'SERIES : résultats recherche =',
+            result.length,
+            '/',
+            count
+          );
+
+          setSeries(result);
+          setTotal(count);
+          setOffset(PAGE_SIZE);
+          setFailedImages([]);
+        } catch (err) {
+          console.error(
+            'ERREUR RECHERCHE SERIES :',
+            err
+          );
+        }
+      },
+      [
+        activeCategory,
+        loadSeries,
+      ]
+    );
+
+  /*
+  ============================================================
+  INITIALISATION
+  ============================================================
+  */
+
+  const initialize =
+    useCallback(async () => {
+      try {
+        console.log(
+          '===================================='
+        );
+
+        console.log(
+          'SERIES : début initialize'
+        );
+
+        /*
+        ------------------------------------------------------
+        ÉTAPE 1
+        SQLite
+        ------------------------------------------------------
+        */
+
+        console.log(
+          'SERIES : chargement initial SQLite...'
+        );
+
+        await loadCategories();
+
+        const [
+          initialSeries,
+          initialTotal,
+        ] = await Promise.all([
+          getSeriesFromDatabase(
+            'all',
+            PAGE_SIZE,
+            0
+          ),
+
+          getSeriesCountFromDatabase(
+            'all'
           ),
         ]);
 
-        setOffset(
-          currentOffset + PAGE_SIZE
+        console.log(
+          'SERIES : SQLite initial =',
+          initialSeries.length,
+          '/',
+          initialTotal
         );
-      }
 
-      setTotal(count);
-    },
-    [offset]
-  );
+        setSeries(initialSeries);
+        setTotal(initialTotal);
+        setOffset(PAGE_SIZE);
 
-  const searchSeries = useCallback(
-    async (text: string) => {
-      const term = text.trim();
+        /*
+        * L'interface peut maintenant
+        * afficher le cache SQLite.
+        */
 
-      if (!term) {
-        await loadSeries(
-          activeCategory,
-          true
+        setLoading(false);
+
+        /*
+        ------------------------------------------------------
+        ÉTAPE 2
+        Synchronisation Xtream
+        ------------------------------------------------------
+        */
+
+        if (
+          syncRunningRef.current
+        ) {
+          return;
+        }
+
+        syncRunningRef.current =
+          true;
+
+        console.log(
+          'SERIES : début synchronisation Xtream...'
         );
-        return;
-      }
 
-      const [result, count] =
-        await Promise.all([
-          searchSeriesFromDatabase(
-            term,
+        setSyncing(true);
+        setSyncProgress(null);
+
+        const syncResult =
+          await syncSeriesTV(
+            progress => {
+              console.log(
+                'SERIES SYNC PROGRESS :',
+                progress
+              );
+
+              setSyncProgress(
+                progress
+              );
+            }
+          );
+
+        console.log(
+          'SERIES : synchronisation terminée :',
+          syncResult
+        );
+
+        /*
+        ------------------------------------------------------
+        ÉTAPE 3
+        Rechargement SQLite
+        ------------------------------------------------------
+        */
+
+        await loadCategories();
+
+        const [
+          synchronizedSeries,
+          synchronizedTotal,
+        ] = await Promise.all([
+          getSeriesFromDatabase(
             activeCategory,
             PAGE_SIZE,
             0
           ),
-          getSearchSeriesCountFromDatabase(
-            term,
+
+          getSeriesCountFromDatabase(
             activeCategory
           ),
         ]);
 
-      setSeries(result);
-      setTotal(count);
-      setOffset(PAGE_SIZE);
-    },
-    [activeCategory, loadSeries]
-  );
+        console.log(
+          'SERIES : après synchronisation =',
+          synchronizedSeries.length,
+          '/',
+          synchronizedTotal
+        );
 
-  const initialize = useCallback(
-      async () => {
+        setSeries(
+          synchronizedSeries
+        );
+
+        setTotal(
+          synchronizedTotal
+        );
+
+        setOffset(PAGE_SIZE);
+        setFailedImages([]);
+
+        console.log(
+          'SERIES : initialize terminé'
+        );
+
+        console.log(
+          '===================================='
+        );
+      } catch (error) {
+        console.error(
+          'ERREUR INITIALISATION SERIES :',
+          error
+        );
+
+        /*
+        ------------------------------------------------------
+        FALLBACK SQLITE
+        ------------------------------------------------------
+        */
+
         try {
-          console.log('SERIES : début initialize');
-
-          console.log('SERIES : chargement catégories...');
           await loadCategories();
-          console.log('SERIES : catégories chargées');
 
-          console.log('SERIES : chargement séries...');
-          const initialSeries = await getSeriesFromDatabase(
-            'all',
-            PAGE_SIZE,
-            0
-          );
-
-          console.log(
-            'SERIES : séries chargées :',
-            initialSeries.length
-          );
-
-          console.log('SERIES : comptage séries...');
-          const total = await getSeriesCountFromDatabase('all');
-
-          console.log(
-            'SERIES : nombre total :',
-            total
-          );
-
-          setSeries(initialSeries);
-          
-        } catch (error) {
-          console.error(
-            'ERREUR INITIALISATION SERIES :',
-            error
-          );
-        }
-      },
-      [loadCategories]
-    );
-
-  useEffect(() => {
-    initialize();
-  }, [initialize]);
-
-  const handleSearch = useCallback(
-    (text: string) => {
-      setSearch(text);
-
-      void searchSeries(text);
-    },
-    [searchSeries]
-  );
-
-  const handleCategory = useCallback(
-    async (categoryId: string) => {
-      setActiveCategory(categoryId);
-      setSearch('');
-
-      const [result, count] =
-        await Promise.all([
-          getSeriesFromDatabase(
-            categoryId,
-            PAGE_SIZE,
-            0
-          ),
-          getSeriesCountFromDatabase(
-            categoryId
-          ),
-        ]);
-
-      setSeries(result);
-      setTotal(count);
-      setOffset(PAGE_SIZE);
-    },
-    []
-  );
-
-  const handleSync = useCallback(
-    async () => {
-      if (syncing) {
-        return;
-      }
-
-      try {
-        setSyncing(true);
-
-        await syncSeriesTV();
-
-        await loadCategories();
-
-        const [result, count] =
-          await Promise.all([
+          const [
+            localSeries,
+            localTotal,
+          ] = await Promise.all([
             getSeriesFromDatabase(
               activeCategory,
               PAGE_SIZE,
               0
             ),
+
             getSeriesCountFromDatabase(
               activeCategory
             ),
           ]);
 
+          setSeries(localSeries);
+          setTotal(localTotal);
+          setOffset(PAGE_SIZE);
+        } catch (databaseError) {
+          console.error(
+            'ERREUR CHARGEMENT SQLITE SERIES :',
+            databaseError
+          );
+        }
+      } finally {
+        setLoading(false);
+        setSyncing(false);
+        syncRunningRef.current =
+          false;
+      }
+    }, [
+      activeCategory,
+      loadCategories,
+    ]);
+
+  /*
+  ============================================================
+  INITIALISATION
+  ============================================================
+  */
+
+  useEffect(() => {
+    void initialize();
+  }, [initialize]);
+
+  /*
+  ============================================================
+  RECHERCHE AVEC PETIT DÉLAI
+  ============================================================
+  */
+
+  useEffect(() => {
+    if (loading) {
+      return;
+    }
+
+    const timer =
+      setTimeout(() => {
+        void searchSeries(search);
+      }, 300);
+
+    return () =>
+      clearTimeout(timer);
+  }, [
+    search,
+    loading,
+    searchSeries,
+  ]);
+
+  /*
+  ============================================================
+  RECHERCHE
+  ============================================================
+  */
+
+  const handleSearch =
+    useCallback(
+      (text: string) => {
+        setSearch(text);
+      },
+      []
+    );
+
+  /*
+  ============================================================
+  CHANGEMENT CATÉGORIE
+  ============================================================
+  */
+
+  const handleCategory =
+    useCallback(
+      async (
+        categoryId: string
+      ) => {
+        console.log(
+          'SERIES : changement catégorie =',
+          categoryId
+        );
+
+        setActiveCategory(
+          categoryId
+        );
+
+        setSearch('');
+
+        try {
+          const [
+            result,
+            count,
+          ] = await Promise.all([
+            getSeriesFromDatabase(
+              categoryId,
+              PAGE_SIZE,
+              0
+            ),
+
+            getSeriesCountFromDatabase(
+              categoryId
+            ),
+          ]);
+
+          console.log(
+            'SERIES : catégorie chargée =',
+            result.length,
+            '/',
+            count
+          );
+
+          setSeries(result);
+          setTotal(count);
+          setOffset(PAGE_SIZE);
+          setFailedImages([]);
+        } catch (error) {
+          console.error(
+            'ERREUR CHANGEMENT CATEGORIE SERIES :',
+            error
+          );
+        }
+      },
+      []
+    );
+
+  /*
+  ============================================================
+  SYNCHRONISATION MANUELLE
+  ============================================================
+  */
+
+  const handleSync =
+    useCallback(async () => {
+      if (
+        syncing ||
+        syncRunningRef.current
+      ) {
+        return;
+      }
+
+      syncRunningRef.current =
+        true;
+
+      try {
+        console.log(
+          'SERIES : synchronisation manuelle...'
+        );
+
+        setSyncing(true);
+        setSyncProgress(null);
+        setError(null);
+
+        const syncResult =
+          await syncSeriesTV(
+            progress => {
+              console.log(
+                'SERIES SYNC PROGRESS :',
+                progress
+              );
+
+              setSyncProgress(
+                progress
+              );
+            }
+          );
+
+        console.log(
+          'SERIES : résultat sync manuelle =',
+          syncResult
+        );
+
+        await loadCategories();
+
+        const [
+          result,
+          count,
+        ] = await Promise.all([
+          getSeriesFromDatabase(
+            activeCategory,
+            PAGE_SIZE,
+            0
+          ),
+
+          getSeriesCountFromDatabase(
+            activeCategory
+          ),
+        ]);
+
         setSeries(result);
         setTotal(count);
         setOffset(PAGE_SIZE);
+        setFailedImages([]);
+      } catch (error) {
+        console.error(
+          'ERREUR SYNCHRONISATION SERIES :',
+          error
+        );
+
+        setError(
+          'Synchronisation impossible. Les données locales sont utilisées.'
+        );
       } finally {
         setSyncing(false);
+        syncRunningRef.current =
+          false;
       }
-    },
-    [
+    }, [
       syncing,
       activeCategory,
       loadCategories,
-    ]
-  );
-
-  const loadMore = useCallback(async () => {
-    if (
-      loading ||
-      syncing ||
-      series.length >= total
-    ) {
-      return;
-    }
-
-    const result = search.trim()
-      ? await searchSeriesFromDatabase(
-          search,
-          activeCategory,
-          PAGE_SIZE,
-          offset
-        )
-      : await getSeriesFromDatabase(
-          activeCategory,
-          PAGE_SIZE,
-          offset
-        );
-
-    if (result.length === 0) {
-      return;
-    }
-
-    setSeries(previous => [
-      ...previous,
-      ...result.filter(
-        item =>
-          !previous.some(
-            existing =>
-              existing.series_id ===
-              item.series_id
-          )
-      ),
     ]);
 
-    setOffset(
-      previous => previous + PAGE_SIZE
-    );
-  }, [
-    loading,
-    syncing,
-    series.length,
-    total,
-    search,
-    activeCategory,
-    offset,
-  ]);
+  /*
+  ============================================================
+  PAGINATION
+  ============================================================
+  */
 
-  const renderSeries = ({
-    item,
-  }: {
-    item: Series;
-  }) => {
-    const image =
-      item.backdrop_path
-        ? (() => {
-            try {
-              const paths =
-                JSON.parse(
-                  item.backdrop_path
-                );
+  const loadMore =
+    useCallback(async () => {
+      if (
+        loading ||
+        syncing ||
+        loadingMoreRef.current ||
+        series.length >= total
+      ) {
+        return;
+      }
 
-              if (
-                Array.isArray(paths) &&
-                paths.length > 0
-              ) {
-                return paths[0];
-              }
-            } catch {
-              return null;
+      loadingMoreRef.current =
+        true;
+
+      console.log(
+        'SERIES : chargement page suivante, offset =',
+        offset
+      );
+
+      try {
+        const result =
+          search.trim()
+            ? await searchSeriesFromDatabase(
+                search.trim(),
+                activeCategory,
+                PAGE_SIZE,
+                offset
+              )
+            : await getSeriesFromDatabase(
+                activeCategory,
+                PAGE_SIZE,
+                offset
+              );
+
+        if (
+          result.length === 0
+        ) {
+          return;
+        }
+
+        setSeries(previous => {
+          const existingIds =
+            new Set(
+              previous.map(
+                item =>
+                  item.series_id
+              )
+            );
+
+          const newSeries =
+            result.filter(
+              item =>
+                !existingIds.has(
+                  item.series_id
+                )
+            );
+
+          return [
+            ...previous,
+            ...newSeries,
+          ];
+        });
+
+        setOffset(
+          previous =>
+            previous + PAGE_SIZE
+        );
+      } catch (error) {
+        console.error(
+          'ERREUR PAGINATION SERIES :',
+          error
+        );
+      } finally {
+        loadingMoreRef.current =
+          false;
+      }
+    }, [
+      loading,
+      syncing,
+      series.length,
+      total,
+      search,
+      activeCategory,
+      offset,
+    ]);
+
+  /*
+  ============================================================
+  ERREUR IMAGE
+  ============================================================
+  */
+
+  const handleImageError =
+    useCallback(
+      (seriesId: number) => {
+        setFailedImages(
+          previous => {
+            if (
+              previous.includes(
+                seriesId
+              )
+            ) {
+              return previous;
             }
 
-            return null;
-          })()
-        : null;
+            return [
+              ...previous,
+              seriesId,
+            ];
+          }
+        );
+      },
+      []
+    );
 
-    return (
-      <Pressable
-        style={styles.card}
-        onPress={() =>
-          router.push({
-          pathname: '/series/[id]',
+  /*
+  ============================================================
+  OUVERTURE SÉRIE
+  ============================================================
+  */
+
+  const handleSeriesPress =
+    useCallback(
+      (seriesId: number) => {
+        router.push({
+          pathname:
+            '/series/[id]',
           params: {
-            id: String(item.series_id),
+            id: String(seriesId),
           },
-        })
-        }
-      >
-        {image ? (
-          <Image
-            source={{ uri: image }}
-            style={styles.poster}
+        });
+      },
+      []
+    );
+
+  /*
+  ============================================================
+  RENDU SÉRIE
+  ============================================================
+  */
+
+  const renderSeries =
+    useCallback(
+      ({
+        item,
+      }: {
+        item: Series;
+      }) => {
+        const imageFailed =
+          failedImages.includes(
+            item.series_id
+          );
+
+        return (
+          <SeriesCard
+            item={item}
+            imageFailed={
+              imageFailed
+            }
+            onImageError={
+              handleImageError
+            }
+            onPress={
+              handleSeriesPress
+            }
           />
-        ) : (
+        );
+      },
+      [
+        failedImages,
+        handleImageError,
+        handleSeriesPress,
+      ]
+    );
+
+  /*
+  ============================================================
+  NOM CATÉGORIE
+  ============================================================
+  */
+
+  const categoryName =
+    activeCategory === 'all'
+      ? 'Toutes les séries'
+      : categories.find(
+          category =>
+            category.category_id ===
+            activeCategory
+        )?.category_name ||
+        'Séries';
+
+  /*
+  ============================================================
+  TEXTE SYNCHRONISATION
+  ============================================================
+  */
+
+  const getSyncText = () => {
+    if (!syncProgress) {
+      return 'Connexion à Xtream...';
+    }
+
+    switch (
+      syncProgress.phase
+    ) {
+      case 'checking':
+        return 'Vérification du catalogue...';
+
+      case 'syncing':
+        if (
+          syncProgress.total > 0
+        ) {
+          return `Synchronisation : ${syncProgress.current}/${syncProgress.total}`;
+        }
+
+        return 'Synchronisation des séries...';
+
+      case 'deleting':
+        return `Nettoyage : ${syncProgress.current}/${syncProgress.total}`;
+
+      case 'done':
+        if (
+          syncProgress.added > 0 ||
+          syncProgress.updated > 0 ||
+          syncProgress.deleted > 0
+        ) {
+          return 'Catalogue mis à jour';
+        }
+
+        return 'Catalogue déjà à jour';
+
+      default:
+        return 'Synchronisation...';
+    }
+  };
+
+  /*
+  ============================================================
+  FOOTER
+  ============================================================
+  */
+
+  const renderFooter =
+    () => {
+      if (
+        series.length > 0 &&
+        series.length < total
+      ) {
+        return (
           <View
-            style={[
-              styles.poster,
-              styles.posterPlaceholder,
-            ]}
+            style={styles.footer}
           >
-            <Text style={styles.placeholderText}>
-              SERIES
+            <ActivityIndicator
+              size="small"
+              color="#E50914"
+            />
+
+            <Text
+              style={
+                styles.footerText
+              }
+            >
+              Chargement...
             </Text>
           </View>
-        )}
+        );
+      }
 
-        <Text
-          style={styles.title}
-          numberOfLines={2}
-        >
-          {item.name}
-        </Text>
+      if (
+        series.length > 0 &&
+        series.length >= total
+      ) {
+        return (
+          <View
+            style={styles.footer}
+          >
+            <Text
+              style={styles.endText}
+            >
+              Toutes les séries sont
+              chargées
+            </Text>
+          </View>
+        );
+      }
 
-        {item.rating ? (
-          <Text style={styles.rating}>
-            ★ {item.rating}
-          </Text>
-        ) : null}
-      </Pressable>
-    );
-  };
+      return null;
+    };
+
+  /*
+  ============================================================
+  CHARGEMENT INITIAL
+  ============================================================
+  */
 
   if (loading) {
     return (
-      <SafeAreaView style={styles.container}>
-        <View style={styles.center}>
-          <ActivityIndicator size="large" />
-          <Text style={styles.loadingText}>
+      <SafeAreaView
+        style={styles.container}
+      >
+        <View
+          style={styles.loadingScreen}
+        >
+          <ActivityIndicator
+            size="large"
+            color="#E50914"
+          />
+
+          <Text
+            style={styles.loadingText}
+          >
             Chargement des séries...
           </Text>
         </View>
@@ -396,278 +1178,361 @@ export default function SeriesScreen() {
     );
   }
 
+  /*
+  ============================================================
+  INTERFACE
+  ============================================================
+  */
+
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
+    <SafeAreaView
+      style={styles.container}
+    >
+      {/* HEADER */}
+
+      <View
+        style={styles.header}
+      >
         <Pressable
-          onPress={() => router.back()}
+          style={
+            styles.backButton
+          }
+          onPress={() =>
+            router.back()
+          }
         >
-          <Text style={styles.back}>
-            ‹ Retour
+          <Text
+            style={
+              styles.backButtonText
+            }
+          >
+            ‹
           </Text>
         </Pressable>
 
-        <Text style={styles.headerTitle}>
-          Séries
-        </Text>
-
-        <Pressable
-          onPress={() => void handleSync()}
-          disabled={syncing}
+        <View
+          style={
+            styles.headerTextContainer
+          }
         >
-          <Text style={styles.sync}>
-            {syncing
-              ? '...'
-              : 'Synchroniser'}
+          <Text
+            style={styles.title}
+          >
+            SÉRIES
           </Text>
-        </Pressable>
+
+          <Text
+            style={styles.subtitle}
+            numberOfLines={1}
+          >
+            {categoryName}
+          </Text>
+        </View>
+
+        <View
+          style={styles.headerSpacer}
+        />
       </View>
 
-      <TextInput
-        value={search}
-        onChangeText={handleSearch}
-        placeholder="Rechercher une série..."
-        placeholderTextColor="#888"
-        style={styles.search}
-      />
+      {/* SYNCHRONISATION */}
 
-      <FlatList
-        horizontal
-        data={[
-          {
-            category_id: 'all',
-            category_name: 'Toutes',
-            parent_id: 0,
-          },
-          ...categories,
-        ]}
-        keyExtractor={item =>
-          item.category_id
-        }
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={
-          styles.categories
-        }
-        renderItem={({ item }) => (
-          <Pressable
-            style={[
-              styles.category,
-              activeCategory ===
-                item.category_id &&
-                styles.categoryActive,
-            ]}
-            onPress={() =>
-              void handleCategory(
-                item.category_id
-              )
+      {syncing ? (
+        <View
+          style={
+            styles.syncContainer
+          }
+        >
+          <View
+            style={
+              styles.syncHeader
             }
           >
             <Text
-              style={[
-                styles.categoryText,
-                activeCategory ===
-                  item.category_id &&
-                  styles.categoryTextActive,
-              ]}
+              style={
+                styles.syncTitle
+              }
+            >
+              Synchronisation
+            </Text>
+
+            <Text
+              style={
+                styles.syncText
+              }
               numberOfLines={1}
             >
-              {item.category_name}
+              {getSyncText()}
+            </Text>
+          </View>
+
+          <View
+            style={
+              styles.progressBackground
+            }
+          >
+            {syncProgress &&
+            syncProgress.total > 0 ? (
+              <View
+                style={[
+                  styles.progressBar,
+                  {
+                    width: `${Math.min(
+                      100,
+                      Math.round(
+                        (syncProgress.current /
+                          syncProgress.total) *
+                          100
+                      )
+                    )}%`,
+                  },
+                ]}
+              />
+            ) : (
+              <View
+                style={
+                  styles.progressIndeterminate
+                }
+              />
+            )}
+          </View>
+
+          {syncProgress &&
+          syncProgress.total > 0 ? (
+            <Text
+              style={
+                styles.syncPercentage
+              }
+            >
+              {Math.round(
+                (syncProgress.current /
+                  syncProgress.total) *
+                  100
+              )}
+              %
+            </Text>
+          ) : null}
+        </View>
+      ) : null}
+
+      {/* RECHERCHE */}
+
+      <View
+        style={
+          styles.searchContainer
+        }
+      >
+        <TextInput
+          value={search}
+          onChangeText={
+            handleSearch
+          }
+          placeholder="Rechercher une série..."
+          placeholderTextColor="#666666"
+          style={
+            styles.searchInput
+          }
+          autoCapitalize="none"
+          autoCorrect={false}
+        />
+
+        {search.length > 0 ? (
+          <Pressable
+            style={
+              styles.clearSearch
+            }
+            onPress={() =>
+              setSearch('')
+            }
+          >
+            <Text
+              style={
+                styles.clearSearchText
+              }
+            >
+              ×
             </Text>
           </Pressable>
-        )}
-      />
-
-      <View style={styles.counter}>
-        <Text style={styles.counterText}>
-          {series.length} / {total} séries
-        </Text>
+        ) : null}
       </View>
+
+      {/* CATÉGORIES */}
+      {/* CATÉGORIES */}
+
+<View style={styles.categoriesContainer}>
+  <FlatList
+    horizontal
+    data={[
+      {
+        category_id: 'all',
+        category_name: 'Toutes',
+        parent_id: 0,
+      },
+      ...categories,
+    ]}
+    keyExtractor={item => item.category_id}
+    showsHorizontalScrollIndicator={false}
+    contentContainerStyle={styles.categories}
+    renderItem={({ item }) => (
+      <Pressable
+        style={[
+          styles.category,
+          activeCategory === item.category_id &&
+            styles.categoryActive,
+        ]}
+        onPress={() =>
+          void handleCategory(item.category_id)
+        }
+      >
+        <Text
+          style={[
+            styles.categoryText,
+            activeCategory === item.category_id &&
+              styles.categoryTextActive,
+          ]}
+          numberOfLines={1}
+        >
+          {item.category_name}
+        </Text>
+      </Pressable>
+    )}
+  />
+</View>
+
+      {/* INFORMATIONS */}
+
+      <View
+        style={styles.infoRow}
+      >
+        <Text
+          style={
+            styles.resultCount
+          }
+        >
+          {search.trim() !== ''
+            ? `${total} résultat${
+                total > 1
+                  ? 's'
+                  : ''
+              }`
+            : `${total} séries`}
+        </Text>
+
+        {!syncing &&
+        series.length === 0 ? null : null}
+      </View>
+
+      {/* ERREUR */}
+
+      {error ? (
+        <View
+          style={
+            styles.errorContainer
+          }
+        >
+          <Text
+            style={
+              styles.errorText
+            }
+          >
+            {error}
+          </Text>
+        </View>
+      ) : null}
+
+      {/* GRILLE */}
 
       <FlatList
         data={series}
+        renderItem={
+          renderSeries
+        }
         keyExtractor={item =>
-          String(item.series_id)
+          String(
+            item.series_id
+          )
         }
-        numColumns={3}
-        renderItem={renderSeries}
-        contentContainerStyle={
-          styles.grid
-        }
+        numColumns={2}
         columnWrapperStyle={
           styles.row
+        }
+        contentContainerStyle={[
+          styles.seriesList,
+          series.length === 0 &&
+            styles.seriesListEmpty,
+        ]}
+        removeClippedSubviews
+        initialNumToRender={10}
+        maxToRenderPerBatch={8}
+        windowSize={5}
+        updateCellsBatchingPeriod={
+          50
         }
         onEndReached={() =>
           void loadMore()
         }
         onEndReachedThreshold={0.5}
+        ListFooterComponent={
+          renderFooter
+        }
         ListEmptyComponent={
-          <View style={styles.empty}>
-            <Text style={styles.emptyText}>
-              Aucune série trouvée.
+          <View
+            style={
+              styles.emptyContainer
+            }
+          >
+            <Text
+              style={styles.emptyIcon}
+            >
+              📺
+            </Text>
+
+            <Text
+              style={
+                styles.emptyTitle
+              }
+            >
+              Aucune série trouvée
+            </Text>
+
+            <Text
+              style={
+                styles.emptyText
+              }
+            >
+              {search.trim() !== ''
+                ? 'Aucune série ne correspond à votre recherche.'
+                : 'Cette catégorie ne contient aucune série.'}
             </Text>
           </View>
         }
-        ListFooterComponent={
-          series.length > 0 &&
-          series.length < total ? (
-            <ActivityIndicator
-              style={styles.footer}
-            />
-          ) : null
-        }
       />
+
+      {/* SYNCHRONISATION MANUELLE */}
+
+      {!syncing ? (
+        <Pressable
+          style={{
+            position: 'absolute',
+            right: 16,
+            top: 14,
+            height: 42,
+            justifyContent: 'center',
+          }}
+          onPress={() =>
+            void handleSync()
+          }
+        >
+          <Text
+            style={{
+              color: '#4DA6FF',
+              fontSize: 12,
+              fontWeight: '600',
+            }}
+          >
+            Synchroniser
+          </Text>
+        </Pressable>
+      ) : null}
     </SafeAreaView>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#0b0b0b',
-  },
-
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-  },
-
-  back: {
-    color: '#ffffff',
-    fontSize: 16,
-  },
-
-  headerTitle: {
-    color: '#ffffff',
-    fontSize: 22,
-    fontWeight: '700',
-  },
-
-  sync: {
-    color: '#4da6ff',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-
-  search: {
-    marginHorizontal: 16,
-    marginBottom: 10,
-    paddingHorizontal: 14,
-    height: 44,
-    borderRadius: 10,
-    backgroundColor: '#1a1a1a',
-    color: '#ffffff',
-    borderWidth: 1,
-    borderColor: '#292929',
-  },
-
-  categories: {
-    paddingHorizontal: 12,
-    paddingBottom: 10,
-  },
-
-  category: {
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    marginHorizontal: 4,
-    borderRadius: 18,
-    backgroundColor: '#1b1b1b',
-  },
-
-  categoryActive: {
-    backgroundColor: '#ffffff',
-  },
-
-  categoryText: {
-    color: '#bbbbbb',
-    fontSize: 13,
-  },
-
-  categoryTextActive: {
-    color: '#000000',
-    fontWeight: '700',
-  },
-
-  counter: {
-    paddingHorizontal: 16,
-    paddingBottom: 8,
-  },
-
-  counterText: {
-    color: '#888888',
-    fontSize: 12,
-  },
-
-  grid: {
-    paddingHorizontal: 10,
-    paddingBottom: 30,
-  },
-
-  row: {
-    justifyContent: 'space-between',
-  },
-
-  card: {
-    width: '31%',
-    marginBottom: 18,
-  },
-
-  poster: {
-    width: '100%',
-    aspectRatio: 0.68,
-    borderRadius: 8,
-    backgroundColor: '#191919',
-  },
-
-  posterPlaceholder: {
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
-  placeholderText: {
-    color: '#666666',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-
-  title: {
-    color: '#ffffff',
-    fontSize: 13,
-    fontWeight: '600',
-    marginTop: 6,
-  },
-
-  rating: {
-    color: '#bbbbbb',
-    fontSize: 11,
-    marginTop: 3,
-  },
-
-  center: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
-  loadingText: {
-    color: '#ffffff',
-    marginTop: 12,
-  },
-
-  empty: {
-    width: '100%',
-    alignItems: 'center',
-    paddingTop: 50,
-  },
-
-  emptyText: {
-    color: '#888888',
-    fontSize: 15,
-  },
-
-  footer: {
-    marginVertical: 20,
-  },
-});

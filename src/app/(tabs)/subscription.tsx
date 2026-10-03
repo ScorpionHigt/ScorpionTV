@@ -1,4 +1,5 @@
 ﻿import { useCallback, useEffect, useState } from 'react';
+
 import {
   ActivityIndicator,
   Image,
@@ -9,8 +10,10 @@ import {
   Text,
   View,
 } from 'react-native';
+
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
+
 import {
   getSubscriptionPlans,
   SubscriptionPlan,
@@ -19,50 +22,118 @@ import {
 const RED = '#E50914';
 
 export default function SubscriptionScreen() {
-  const [plans, setPlans] = useState<SubscriptionPlan[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [plans, setPlans] =
+    useState<SubscriptionPlan[]>([]);
 
-  const loadPlans = useCallback(async () => {
-    try {
-      setError(null);
+  const [loading, setLoading] =
+    useState(true);
 
-      const data = await getSubscriptionPlans();
+  const [refreshing, setRefreshing] =
+    useState(false);
 
-      setPlans(data);
-    } catch (error) {
-      console.error('ERREUR ABONNEMENTS :', error);
+  const [error, setError] =
+    useState<string | null>(null);
 
-      setError(
-        'Impossible de récupérer les offres actuellement.'
-      );
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, []);
+  /*
+   * ---------------------------------------------------------------
+   * CHARGEMENT DES PLANS
+   * ---------------------------------------------------------------
+   */
+
+  const loadPlans =
+    useCallback(async () => {
+      try {
+        setError(null);
+
+        console.log(
+          'ABONNEMENTS : récupération des offres...',
+        );
+
+        const data =
+          await getSubscriptionPlans();
+
+        console.log(
+          'ABONNEMENTS : offres récupérées =',
+          data.length,
+        );
+
+        console.log(
+          'ABONNEMENTS : données =',
+          data,
+        );
+
+        setPlans(data);
+      } catch (error) {
+        console.error(
+          'ERREUR ABONNEMENTS :',
+          error,
+        );
+
+        setError(
+          'Impossible de récupérer les offres actuellement.',
+        );
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
+      }
+    }, []);
 
   useEffect(() => {
     loadPlans();
   }, [loadPlans]);
+
+  /*
+   * ---------------------------------------------------------------
+   * ACTUALISATION
+   * ---------------------------------------------------------------
+   */
 
   const handleRefresh = () => {
     setRefreshing(true);
     loadPlans();
   };
 
-  const formatPrice = (price: number, currency: string) => {
-    return `${price.toLocaleString('fr-FR')} ${currency}`;
+  /*
+   * ---------------------------------------------------------------
+   * FORMAT PRIX
+   * ---------------------------------------------------------------
+   */
+
+  const formatPrice = (
+    price: number,
+    currency: string,
+  ) => {
+    return `${price.toLocaleString(
+      'fr-FR',
+    )} ${currency}`;
   };
+
+  /*
+   * ---------------------------------------------------------------
+   * CHARGEMENT
+   * ---------------------------------------------------------------
+   */
 
   if (loading) {
     return (
-      <SafeAreaView style={styles.container}>
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={RED} />
+      <SafeAreaView
+        style={styles.container}
+      >
+        <View
+          style={
+            styles.loadingContainer
+          }
+        >
+          <ActivityIndicator
+            size="large"
+            color={RED}
+          />
 
-          <Text style={styles.loadingText}>
+          <Text
+            style={
+              styles.loadingText
+            }
+          >
             Chargement des abonnements...
           </Text>
         </View>
@@ -70,175 +141,446 @@ export default function SubscriptionScreen() {
     );
   }
 
+  /*
+   * ---------------------------------------------------------------
+   * INTERFACE
+   * ---------------------------------------------------------------
+   */
+
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView
+      style={styles.container}
+    >
       <ScrollView
-        contentContainerStyle={styles.scrollContent}
-        showsVerticalScrollIndicator={false}
+        contentContainerStyle={
+          styles.scrollContent
+        }
+        showsVerticalScrollIndicator={
+          false
+        }
         refreshControl={
           <RefreshControl
-            refreshing={refreshing}
-            onRefresh={handleRefresh}
+            refreshing={
+              refreshing
+            }
+            onRefresh={
+              handleRefresh
+            }
             tintColor={RED}
           />
         }
       >
-        <View style={styles.header}>
-          <Text style={styles.icon}>🎫</Text>
+        {/* HEADER */}
 
-          <Text style={styles.title}>
+        <View
+          style={styles.header}
+        >
+          <Text
+            style={styles.icon}
+          >
+            🎫
+          </Text>
+
+          <Text
+            style={styles.title}
+          >
             Abonnement
           </Text>
 
-          <Text style={styles.description}>
-            Choisissez l'offre ScorpionTV qui vous convient.
+          <Text
+            style={
+              styles.description
+            }
+          >
+            Choisissez l'offre ScorpionTV
+            qui vous convient.
           </Text>
         </View>
 
+        {/* ERREUR */}
+
         {error && (
-          <View style={styles.errorBox}>
-            <Text style={styles.errorText}>
+          <View
+            style={styles.errorBox}
+          >
+            <Text
+              style={
+                styles.errorText
+              }
+            >
               {error}
             </Text>
 
             <Pressable
-              style={styles.retryButton}
-              onPress={loadPlans}
+              style={
+                styles.retryButton
+              }
+              onPress={
+                loadPlans
+              }
             >
-              <Text style={styles.retryText}>
+              <Text
+                style={
+                  styles.retryText
+                }
+              >
                 Réessayer
               </Text>
             </Pressable>
           </View>
         )}
 
-        {!error && plans.length === 0 && (
-          <View style={styles.emptyBox}>
-            <Text style={styles.emptyText}>
-              Aucune offre disponible actuellement.
-            </Text>
-          </View>
-        )}
+        {/* AUCUNE OFFRE */}
 
-        <View style={styles.plansContainer}>
-          {plans.map((plan) => (
+        {!error &&
+          plans.length === 0 && (
             <View
-              key={plan.id}
-              style={[
-                styles.planCard,
-                plan.is_promotion && styles.promotionCard,
-              ]}
+              style={
+                styles.emptyBox
+              }
             >
-              {plan.image_url ? (
-                <Image
-                  source={{ uri: plan.image_url }}
-                  style={styles.planImage}
-                  resizeMode="cover"
-                />
-              ) : (
-                <View style={styles.imageFallback}>
-                  <Text style={styles.fallbackIcon}>
-                    👑
-                  </Text>
-                </View>
-              )}
-
-              {plan.is_promotion && (
-                <View style={styles.promotionBadge}>
-                  <Text style={styles.promotionText}>
-                    PROMOTION
-                  </Text>
-                </View>
-              )}
-
-              <View style={styles.planContent}>
-                <Text style={styles.planName}>
-                  {plan.name}
-                </Text>
-
-                {plan.description && (
-                  <Text style={styles.planDescription}>
-                    {plan.description}
-                  </Text>
-                )}
-
-                <View style={styles.priceContainer}>
-                  <Text style={styles.price}>
-                    {formatPrice(plan.price, plan.currency)}
-                  </Text>
-
-                  <Text style={styles.duration}>
-                    {plan.duration_months === 1
-                      ? '1 mois'
-                      : `${plan.duration_months} mois`}
-                  </Text>
-                </View>
-
-                <View style={styles.separator} />
-
-                <View style={styles.features}>
-                  <Feature
-                    label="Chaînes TV"
-                    value={plan.tv_channels_count}
-                  />
-
-                  <Feature
-                    label="Films"
-                    value={plan.movies_count}
-                  />
-
-                  <Feature
-                    label="Séries"
-                    value={plan.series_count}
-                  />
-                </View>
-
-                <Pressable
-                  style={styles.subscribeButton}
-                  onPress={() => {
-                    router.push({
-                      pathname: '/payment',
-                      params: {
-                        planId: String(plan.id),
-                        planName: plan.name,
-                        price: String(plan.price),
-                        currency: plan.currency,
-                        duration: String(plan.duration_months),
-                      },
-                    });
-                  }}
-                    >
-                  <Text style={styles.subscribeText}>
-                    Choisir cette offre
-                  </Text>
-                </Pressable>
-              </View>
+              <Text
+                style={
+                  styles.emptyText
+                }
+              >
+                Aucune offre disponible
+                actuellement.
+              </Text>
             </View>
-          ))}
+          )}
+
+        {/* PLANS */}
+
+        <View
+          style={
+            styles.plansContainer
+          }
+        >
+          {plans.map(
+            plan => {
+              /*
+               * ---------------------------------------------------
+               * DROITS DU PLAN
+               * ---------------------------------------------------
+               */
+
+              const adultAccess =
+                plan.adult_access === true;
+
+              const promotionActive =
+                plan.is_promotion === true;
+
+              return (
+                <View
+                  key={plan.id}
+                  style={[
+                    styles.planCard,
+                    promotionActive &&
+                      styles.promotionCard,
+                  ]}
+                >
+                  {/* IMAGE */}
+
+                  {plan.image_url ? (
+                    <Image
+                      source={{
+                        uri: plan.image_url,
+                      }}
+                      style={
+                        styles.planImage
+                      }
+                      resizeMode="cover"
+                    />
+                  ) : (
+                    <View
+                      style={
+                        styles.imageFallback
+                      }
+                    >
+                      <Text
+                        style={
+                          styles.fallbackIcon
+                        }
+                      >
+                        👑
+                      </Text>
+                    </View>
+                  )}
+
+                  {/* BADGE PROMOTION */}
+
+                  {promotionActive && (
+                    <View
+                      style={
+                        styles.promotionBadge
+                      }
+                    >
+                      <Text
+                        style={
+                          styles.promotionText
+                        }
+                      >
+                        🎉 PROMO
+                      </Text>
+                    </View>
+                  )}
+
+                  <View
+                    style={
+                      styles.planContent
+                    }
+                  >
+                    {/* NOM + ICÔNES */}
+
+                    <View
+                      style={
+                        styles.planNameRow
+                      }
+                    >
+                      <Text
+                        style={
+                          styles.planName
+                        }
+                      >
+                        {plan.name}
+                      </Text>
+
+                      <View
+                        style={
+                          styles.planIcons
+                        }
+                      >
+                        {adultAccess && (
+                          <Text
+                            style={
+                              styles.adultIcon
+                            }
+                          >
+                            🔞
+                          </Text>
+                        )}
+
+                        {promotionActive && (
+                          <Text
+                            style={
+                              styles.promotionIcon
+                            }
+                          >
+                            🎉
+                          </Text>
+                        )}
+                      </View>
+                    </View>
+
+                    {/* DESCRIPTION */}
+
+                    {plan.description && (
+                      <Text
+                        style={
+                          styles.planDescription
+                        }
+                      >
+                        {
+                          plan.description
+                        }
+                      </Text>
+                    )}
+
+                    {/* PRIX */}
+
+                    <View
+                      style={
+                        styles.priceContainer
+                      }
+                    >
+                      <Text
+                        style={
+                          styles.price
+                        }
+                      >
+                        {formatPrice(
+                          plan.price,
+                          plan.currency,
+                        )}
+                      </Text>
+
+                      <Text
+                        style={
+                          styles.duration
+                        }
+                      >
+                        {plan.duration_months ===
+                        1
+                          ? '1 mois'
+                          : `${plan.duration_months} mois`}
+                      </Text>
+                    </View>
+
+                    <View
+                      style={
+                        styles.separator
+                      }
+                    />
+
+                    {/* FONCTIONNALITÉS */}
+
+                    <View
+                      style={
+                        styles.features
+                      }
+                    >
+                      <Feature
+                        label="Chaînes TV"
+                        value={
+                          plan.tv_channels_count
+                        }
+                      />
+
+                      <Feature
+                        label="Films"
+                        value={
+                          plan.movies_count
+                        }
+                      />
+
+                      <Feature
+                        label="Séries"
+                        value={
+                          plan.series_count
+                        }
+                      />
+
+                      {/* ACCÈS ADULTE */}
+
+                      <View
+                        style={
+                          styles.featureRow
+                        }
+                      >
+                        <Text
+                          style={
+                            styles.featureLabel
+                          }
+                        >
+                          Contenu adulte
+                        </Text>
+
+                        <Text
+                          style={[
+                            styles.featureValue,
+                            adultAccess &&
+                              styles.adultFeatureValue,
+                          ]}
+                        >
+                          {adultAccess
+                            ? '🔞 Oui'
+                            : 'Non'}
+                        </Text>
+                      </View>
+                    </View>
+
+                    {/* BOUTON */}
+
+                    <Pressable
+                      style={
+                        styles.subscribeButton
+                      }
+                      onPress={() => {
+                        router.push({
+                          pathname:
+                            '/payment',
+                          params: {
+                            planId:
+                              String(
+                                plan.id,
+                              ),
+
+                            planName:
+                              plan.name,
+
+                            price:
+                              String(
+                                plan.price,
+                              ),
+
+                            currency:
+                              plan.currency,
+
+                            duration:
+                              String(
+                                plan.duration_months,
+                              ),
+                          },
+                        });
+                      }}
+                    >
+                      <Text
+                        style={
+                          styles.subscribeText
+                        }
+                      >
+                        Choisir cette offre
+                      </Text>
+                    </Pressable>
+                  </View>
+                </View>
+              );
+            },
+          )}
         </View>
       </ScrollView>
     </SafeAreaView>
   );
 }
 
+/*
+ * -----------------------------------------------------------------
+ * FEATURE
+ * -----------------------------------------------------------------
+ */
+
 type FeatureProps = {
   label: string;
   value: number;
 };
 
-function Feature({ label, value }: FeatureProps) {
+function Feature({
+  label,
+  value,
+}: FeatureProps) {
   return (
-    <View style={styles.featureRow}>
-      <Text style={styles.featureLabel}>
+    <View
+      style={
+        styles.featureRow
+      }
+    >
+      <Text
+        style={
+          styles.featureLabel
+        }
+      >
         {label}
       </Text>
 
-      <Text style={styles.featureValue}>
-        {value.toLocaleString('fr-FR')}
+      <Text
+        style={
+          styles.featureValue
+        }
+      >
+        {value.toLocaleString(
+          'fr-FR',
+        )}
       </Text>
     </View>
   );
 }
+
+/*
+ * -----------------------------------------------------------------
+ * STYLES
+ * -----------------------------------------------------------------
+ */
 
 const styles = StyleSheet.create({
   container: {
@@ -296,11 +638,13 @@ const styles = StyleSheet.create({
     backgroundColor: '#151515',
     borderRadius: 18,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
+    borderColor:
+      'rgba(255,255,255,0.08)',
   },
 
   promotionCard: {
-    borderColor: 'rgba(229,9,20,0.55)',
+    borderColor:
+      'rgba(229,9,20,0.55)',
   },
 
   planImage: {
@@ -341,10 +685,37 @@ const styles = StyleSheet.create({
     padding: 18,
   },
 
+  /*
+   * NOM DU PLAN + ICÔNES
+   */
+
+  planNameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent:
+      'space-between',
+  },
+
   planName: {
+    flex: 1,
     color: '#FFFFFF',
     fontSize: 21,
     fontWeight: '800',
+  },
+
+  planIcons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginLeft: 10,
+    gap: 6,
+  },
+
+  adultIcon: {
+    fontSize: 20,
+  },
+
+  promotionIcon: {
+    fontSize: 20,
   },
 
   planDescription: {
@@ -357,7 +728,8 @@ const styles = StyleSheet.create({
   priceContainer: {
     flexDirection: 'row',
     alignItems: 'baseline',
-    justifyContent: 'space-between',
+    justifyContent:
+      'space-between',
     marginTop: 18,
   },
 
@@ -374,7 +746,8 @@ const styles = StyleSheet.create({
 
   separator: {
     height: 1,
-    backgroundColor: 'rgba(255,255,255,0.08)',
+    backgroundColor:
+      'rgba(255,255,255,0.08)',
     marginVertical: 16,
   },
 
@@ -385,7 +758,8 @@ const styles = StyleSheet.create({
   featureRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    justifyContent:
+      'space-between',
   },
 
   featureLabel: {
@@ -397,6 +771,10 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 14,
     fontWeight: '700',
+  },
+
+  adultFeatureValue: {
+    color: '#FFFFFF',
   },
 
   subscribeButton: {
@@ -419,7 +797,8 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     backgroundColor: '#181818',
     borderWidth: 1,
-    borderColor: 'rgba(229,9,20,0.35)',
+    borderColor:
+      'rgba(229,9,20,0.35)',
     alignItems: 'center',
     marginBottom: 20,
   },
@@ -458,4 +837,3 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
 });
-

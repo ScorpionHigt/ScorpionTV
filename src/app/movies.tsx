@@ -6,6 +6,8 @@
   useState,
 } from 'react';
 
+import { moviesStyles as styles } from '../styles/moviesStyles';
+
 import {
   getCategoriesFromDatabase,
   getMoviesFromDatabase,
@@ -23,7 +25,6 @@ import {
   FlatList,
   Image,
   Pressable,
-  StyleSheet,
   Text,
   TextInput,
   View,
@@ -33,6 +34,10 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 
 import CategoryBar from '../components/CategoryBar';
+
+import {
+  getCachedUserAccess,
+} from '../api/accessApi';
 
 type Category = {
   category_id: string;
@@ -107,28 +112,56 @@ const MovieCard = memo(
         ) : null}
       </Pressable>
     );
-  }
+  },
 );
 
 MovieCard.displayName = 'MovieCard';
 
 export default function MoviesScreen() {
-  const [categories, setCategories] = useState<Category[]>(
-    []
-  );
+  /*
+   * ---------------------------------------------------------------
+   * DONNÉES
+   * ---------------------------------------------------------------
+   */
 
-  const [movies, setMovies] = useState<Movie[]>([]);
+  const [categories, setCategories] =
+    useState<Category[]>([]);
 
-  const [searchText, setSearchText] = useState('');
+  const [movies, setMovies] =
+    useState<Movie[]>([]);
 
-  const [failedImages, setFailedImages] = useState<
-    number[]
-  >([]);
+  const [searchText, setSearchText] =
+    useState('');
+
+  const [failedImages, setFailedImages] =
+    useState<number[]>([]);
 
   const [activeCategory, setActiveCategory] =
     useState('');
 
-  const [totalMovies, setTotalMovies] = useState(0);
+  const [totalMovies, setTotalMovies] =
+    useState(0);
+
+  /*
+   * ---------------------------------------------------------------
+   * DROITS UTILISATEUR
+   * ---------------------------------------------------------------
+   */
+
+  const [accessChecked, setAccessChecked] =
+    useState(false);
+
+  const [moviesLimit, setMoviesLimit] =
+    useState(0);
+
+  const [adultAccess, setAdultAccess] =
+    useState(false);
+
+  /*
+   * ---------------------------------------------------------------
+   * CHARGEMENT
+   * ---------------------------------------------------------------
+   */
 
   const [loadingCategories, setLoadingCategories] =
     useState(true);
@@ -139,41 +172,41 @@ export default function MoviesScreen() {
   const [loadingMore, setLoadingMore] =
     useState(false);
 
-  const [hasMore, setHasMore] = useState(true);
+  const [hasMore, setHasMore] =
+    useState(true);
 
-  const [error, setError] = useState<string | null>(
-    null
-  );
+  const [error, setError] =
+    useState<string | null>(null);
 
   /*
-   * Synchronisation Xtream
+   * ---------------------------------------------------------------
+   * SYNCHRONISATION XTREAM
+   * ---------------------------------------------------------------
    */
-  const [syncing, setSyncing] = useState(false);
+
+  const [syncing, setSyncing] =
+    useState(false);
 
   const [syncProgress, setSyncProgress] =
     useState<MovieSyncProgress | null>(null);
 
   /*
-   * Permet de savoir si l'initialisation
-   * complète de l'écran est terminée.
+   * ---------------------------------------------------------------
+   * REFS
+   * ---------------------------------------------------------------
    */
-  const initializedRef = useRef(false);
 
-  /*
-   * Empêche plusieurs synchronisations
-   * simultanées.
-   */
-  const syncRunningRef = useRef(false);
+  const initializedRef =
+    useRef(false);
 
-  /*
-   * Verrou indépendant du state.
-   */
-  const loadingMoreRef = useRef(false);
+  const syncRunningRef =
+    useRef(false);
 
-  /*
-   * Numéro de la dernière recherche.
-   */
-  const searchRequestRef = useRef(0);
+  const loadingMoreRef =
+    useRef(false);
+
+  const searchRequestRef =
+    useRef(0);
 
   /*
    * ---------------------------------------------------------------
@@ -191,46 +224,139 @@ export default function MoviesScreen() {
 
       /*
        * -----------------------------------------------------------
-       * 1. Charger immédiatement le cache SQLite
+       * 0. RÉCUPÉRATION DES DROITS DEPUIS LE CACHE
        * -----------------------------------------------------------
        */
 
       console.log(
-        'FILMS : chargement du cache SQLite...'
+        'FILMS : récupération des droits depuis le cache...',
+      );
+
+      const userAccess =
+        getCachedUserAccess();
+
+      console.log(
+        'FILMS : UserAccess en cache =',
+        userAccess,
+      );
+
+      /*
+       * Aucun accès disponible.
+       */
+      if (
+        !userAccess?.subscription ||
+        !userAccess?.limits
+      ) {
+        console.log(
+          'FILMS : aucun abonnement ou aucune limite disponible.',
+        );
+
+        setMoviesLimit(0);
+        setAdultAccess(false);
+        setAccessChecked(true);
+
+        setMovies([]);
+        setTotalMovies(0);
+        setHasMore(false);
+
+        return;
+      }
+
+      /*
+       * Limite films.
+       */
+      const cachedMoviesLimit =
+        userAccess.limits.movies ?? 0;
+
+      /*
+       * Accès contenu adulte.
+       */
+      const cachedAdultAccess =
+        userAccess.limits.adult === true;
+
+      console.log(
+        'FILMS : limite films =',
+        cachedMoviesLimit,
+      );
+
+      console.log(
+        'FILMS : accès adulte =',
+        cachedAdultAccess,
+      );
+
+      setMoviesLimit(
+        cachedMoviesLimit,
+      );
+
+      setAdultAccess(
+        cachedAdultAccess,
+      );
+
+      setAccessChecked(true);
+
+      /*
+       * Aucun film autorisé.
+       */
+      if (cachedMoviesLimit <= 0) {
+        console.log(
+          'FILMS : accès aux films refusé.',
+        );
+
+        setMovies([]);
+        setTotalMovies(0);
+        setHasMore(false);
+
+        return;
+      }
+
+      /*
+       * -----------------------------------------------------------
+       * 1. CHARGER IMMÉDIATEMENT SQLITE
+       * -----------------------------------------------------------
+       */
+
+      console.log(
+        'FILMS : chargement du cache SQLite...',
       );
 
       const cachedCategories =
         await getCategoriesFromDatabase();
 
-      setCategories(cachedCategories);
+      setCategories(
+        cachedCategories,
+      );
 
       let firstCategory = '';
 
-      if (cachedCategories.length > 0) {
+      if (
+        cachedCategories.length > 0
+      ) {
         firstCategory =
           cachedCategories[0].category_id;
 
-        setActiveCategory(firstCategory);
+        setActiveCategory(
+          firstCategory,
+        );
 
-        await loadMovies(firstCategory);
+        await loadMovies(
+          firstCategory,
+          cachedMoviesLimit,
+        );
       } else {
-        /*
-         * SQLite vide :
-         * on ne peut pas encore afficher de films.
-         */
         setMovies([]);
         setTotalMovies(0);
         setHasMore(false);
       }
 
       /*
-       * L'écran peut maintenant fonctionner avec le cache.
+       * L'écran peut maintenant fonctionner
+       * avec les données locales.
        */
       initializedRef.current = true;
 
       /*
        * -----------------------------------------------------------
-       * 2. Synchronisation Xtream
+       * 2. SYNCHRONISATION XTREAM
        * -----------------------------------------------------------
        */
 
@@ -238,40 +364,62 @@ export default function MoviesScreen() {
 
       /*
        * -----------------------------------------------------------
-       * 3. Relire SQLite après synchronisation
+       * 3. RELIRE SQLITE APRÈS SYNCHRONISATION
        * -----------------------------------------------------------
        */
 
       const updatedCategories =
         await getCategoriesFromDatabase();
 
-      setCategories(updatedCategories);
+      setCategories(
+        updatedCategories,
+      );
 
-      let categoryToLoad = activeCategory;
+      let categoryToLoad =
+        firstCategory;
 
       /*
-       * Si la catégorie actuelle n'existe plus,
-       * on prend la première catégorie disponible.
+       * Utiliser la catégorie actuellement sélectionnée
+       * si elle existe toujours.
        */
       const currentCategoryExists =
         updatedCategories.some(
           category =>
             category.category_id ===
-            categoryToLoad
+            activeCategory,
         );
 
+      if (
+        currentCategoryExists
+      ) {
+        categoryToLoad =
+          activeCategory;
+      }
+
+      /*
+       * Si la catégorie actuelle n'existe plus,
+       * utiliser la première disponible.
+       */
       if (
         !currentCategoryExists &&
         updatedCategories.length > 0
       ) {
         categoryToLoad =
-          updatedCategories[0].category_id;
+          updatedCategories[0]
+            .category_id;
 
-        setActiveCategory(categoryToLoad);
+        setActiveCategory(
+          categoryToLoad,
+        );
       }
 
-      if (updatedCategories.length > 0) {
-        await loadMovies(categoryToLoad);
+      if (
+        updatedCategories.length > 0
+      ) {
+        await loadMovies(
+          categoryToLoad,
+          cachedMoviesLimit,
+        );
       } else {
         setMovies([]);
         setTotalMovies(0);
@@ -280,11 +428,11 @@ export default function MoviesScreen() {
     } catch (err) {
       console.error(
         'Erreur initialisation films :',
-        err
+        err,
       );
 
       setError(
-        'Impossible de charger les films.'
+        'Impossible de charger les films.',
       );
     } finally {
       setLoadingCategories(false);
@@ -297,90 +445,97 @@ export default function MoviesScreen() {
    * ---------------------------------------------------------------
    */
 
-  const synchronizeCatalog = async () => {
-    if (syncRunningRef.current) {
-      return;
-    }
-
-    syncRunningRef.current = true;
-
-    try {
-      setSyncing(true);
-      setError(null);
-
-      console.log(
-        'FILMS : début synchronisation Xtream...'
-      );
-
-      /*
-       * Synchronisation des catégories.
-       */
-      console.log(
-        'CATÉGORIES FILMS : synchronisation...'
-      );
-
-      await syncCategories();
-
-      /*
-       * Synchronisation intelligente des films.
-       */
-      console.log(
-        'FILMS : synchronisation intelligente...'
-      );
-
-      const result =
-        await syncMoviesWithProgress(
-          progress => {
-            setSyncProgress(progress);
-          }
-        );
-
-      console.log(
-        'FILMS : synchronisation terminée',
-        result
-      );
-
-      /*
-       * Recharger les catégories après synchronisation.
-       */
-      const updatedCategories =
-        await getCategoriesFromDatabase();
-
-      setCategories(updatedCategories);
-
-      /*
-       * Si aucune catégorie n'était sélectionnée,
-       * prendre la première.
-       */
+  const synchronizeCatalog =
+    async () => {
       if (
-        activeCategory === '' &&
-        updatedCategories.length > 0
+        syncRunningRef.current
       ) {
-        setActiveCategory(
-          updatedCategories[0].category_id
-        );
+        return;
       }
-    } catch (err) {
-      console.error(
-        'Erreur synchronisation films :',
-        err
-      );
 
-      /*
-       * Important :
-       * si SQLite contient déjà des films,
-       * on ne vide pas l'écran.
-       *
-       * La synchronisation est secondaire.
-       */
-      setError(
-        'Synchronisation impossible. Les données locales sont utilisées.'
-      );
-    } finally {
-      setSyncing(false);
-      syncRunningRef.current = false;
-    }
-  };
+      syncRunningRef.current =
+        true;
+
+      try {
+        setSyncing(true);
+        setError(null);
+
+        console.log(
+          'FILMS : début synchronisation Xtream...',
+        );
+
+        /*
+         * Synchronisation des catégories.
+         */
+        console.log(
+          'CATÉGORIES FILMS : synchronisation...',
+        );
+
+        await syncCategories();
+
+        /*
+         * Synchronisation intelligente.
+         */
+        console.log(
+          'FILMS : synchronisation intelligente...',
+        );
+
+        const result =
+          await syncMoviesWithProgress(
+            progress => {
+              setSyncProgress(
+                progress,
+              );
+            },
+          );
+
+        console.log(
+          'FILMS : synchronisation terminée',
+          result,
+        );
+
+        /*
+         * Relire les catégories.
+         */
+        const updatedCategories =
+          await getCategoriesFromDatabase();
+
+        setCategories(
+          updatedCategories,
+        );
+
+        /*
+         * Si aucune catégorie n'est sélectionnée,
+         * prendre la première.
+         */
+        if (
+          activeCategory === '' &&
+          updatedCategories.length > 0
+        ) {
+          setActiveCategory(
+            updatedCategories[0]
+              .category_id,
+          );
+        }
+      } catch (err) {
+        console.error(
+          'Erreur synchronisation films :',
+          err,
+        );
+
+        /*
+         * Les données SQLite restent affichées.
+         */
+        setError(
+          'Synchronisation impossible. Les données locales sont utilisées.',
+        );
+      } finally {
+        setSyncing(false);
+
+        syncRunningRef.current =
+          false;
+      }
+    };
 
   /*
    * ---------------------------------------------------------------
@@ -389,30 +544,37 @@ export default function MoviesScreen() {
    */
 
   useEffect(() => {
-    /*
-     * Avant la fin de l'initialisation,
-     * on ne lance pas de recherche automatique.
-     */
-    if (!initializedRef.current) {
+    if (
+      !initializedRef.current
+    ) {
       return;
     }
 
-    const timer = setTimeout(() => {
-      if (searchText.trim() !== '') {
-        searchMovies(searchText);
-      } else {
-        /*
-         * Invalide immédiatement toute recherche
-         * encore en cours.
-         */
-        searchRequestRef.current++;
+    const timer =
+      setTimeout(() => {
+        if (
+          searchText.trim() !== ''
+        ) {
+          searchMovies(
+            searchText,
+          );
+        } else {
+          searchRequestRef.current++;
 
-        loadMovies(activeCategory);
-      }
-    }, 300);
+          loadMovies(
+            activeCategory,
+            moviesLimit,
+          );
+        }
+      }, 300);
 
-    return () => clearTimeout(timer);
-  }, [searchText]);
+    return () =>
+      clearTimeout(timer);
+  }, [
+    searchText,
+    activeCategory,
+    moviesLimit,
+  ]);
 
   /*
    * ---------------------------------------------------------------
@@ -420,85 +582,118 @@ export default function MoviesScreen() {
    * ---------------------------------------------------------------
    */
 
-  const searchMovies = async (
-    text: string
-  ) => {
-    const requestId =
-      ++searchRequestRef.current;
+  const searchMovies =
+    async (
+      text: string,
+    ) => {
+      const requestId =
+        ++searchRequestRef.current;
 
-    const search = text.trim();
+      const search =
+        text.trim();
 
-    if (search === '') {
-      await loadMovies(activeCategory);
-      return;
-    }
+      if (search === '') {
+        await loadMovies(
+          activeCategory,
+          moviesLimit,
+        );
 
-    try {
-      setLoadingMovies(true);
-      setError(null);
-
-      const [result, count] =
-        await Promise.all([
-          searchMoviesFromDatabase(
-            search,
-            activeCategory,
-            SEARCH_PAGE_SIZE,
-            0
-          ),
-
-          getSearchMoviesCountFromDatabase(
-            search,
-            activeCategory
-          ),
-        ]);
-
-      /*
-       * Une recherche plus récente existe :
-       * on ignore ce résultat.
-       */
-      if (
-        requestId !==
-        searchRequestRef.current
-      ) {
         return;
       }
 
-      setMovies(result);
-      setTotalMovies(count);
-      setFailedImages([]);
+      try {
+        setLoadingMovies(true);
+        setError(null);
 
-      setHasMore(
-        result.length < count
-      );
-    } catch (err) {
-      if (
-        requestId !==
-        searchRequestRef.current
-      ) {
-        return;
+        const [
+          result,
+          count,
+        ] =
+          await Promise.all([
+            searchMoviesFromDatabase(
+              search,
+              activeCategory,
+              SEARCH_PAGE_SIZE,
+              0,
+            ),
+
+            getSearchMoviesCountFromDatabase(
+              search,
+              activeCategory,
+            ),
+          ]);
+
+        /*
+         * Recherche plus récente :
+         * ignorer le résultat.
+         */
+        if (
+          requestId !==
+          searchRequestRef.current
+        ) {
+          return;
+        }
+
+        /*
+         * Respect de la limite utilisateur.
+         */
+        const limitedResult =
+          result.slice(
+            0,
+            moviesLimit,
+          );
+
+        const limitedCount =
+          Math.min(
+            count,
+            moviesLimit,
+          );
+
+        setMovies(
+          limitedResult,
+        );
+
+        setTotalMovies(
+          limitedCount,
+        );
+
+        setFailedImages([]);
+
+        setHasMore(
+          limitedResult.length <
+            limitedCount,
+        );
+      } catch (err) {
+        if (
+          requestId !==
+          searchRequestRef.current
+        ) {
+          return;
+        }
+
+        console.error(
+          'Erreur recherche films :',
+          err,
+        );
+
+        setMovies([]);
+        setTotalMovies(0);
+        setHasMore(false);
+
+        setError(
+          'Erreur pendant la recherche.',
+        );
+      } finally {
+        if (
+          requestId ===
+          searchRequestRef.current
+        ) {
+          setLoadingMovies(
+            false,
+          );
+        }
       }
-
-      console.error(
-        'Erreur recherche films :',
-        err
-      );
-
-      setMovies([]);
-      setTotalMovies(0);
-      setHasMore(false);
-
-      setError(
-        'Erreur pendant la recherche.'
-      );
-    } finally {
-      if (
-        requestId ===
-        searchRequestRef.current
-      ) {
-        setLoadingMovies(false);
-      }
-    }
-  };
+    };
 
   /*
    * ---------------------------------------------------------------
@@ -506,50 +701,96 @@ export default function MoviesScreen() {
    * ---------------------------------------------------------------
    */
 
-  const loadMovies = async (
-    categoryId?: string
-  ) => {
-    try {
-      setLoadingMovies(true);
-      setError(null);
+  const loadMovies =
+    async (
+      categoryId?: string,
+      limitOverride?: number,
+    ) => {
+      try {
+        setLoadingMovies(true);
+        setError(null);
 
-      const [result, count] =
-        await Promise.all([
-          getMoviesFromDatabase(
-            categoryId,
-            PAGE_SIZE,
-            0
-          ),
+        const effectiveLimit =
+          limitOverride ??
+          moviesLimit;
 
-          getMoviesCountFromDatabase(
-            categoryId
-          ),
-        ]);
+        /*
+         * Aucun droit.
+         */
+        if (
+          effectiveLimit <= 0
+        ) {
+          setMovies([]);
+          setTotalMovies(0);
+          setHasMore(false);
 
-      setMovies(result);
-      setTotalMovies(count);
-      setFailedImages([]);
+          return;
+        }
 
-      setHasMore(
-        result.length < count
-      );
-    } catch (err) {
-      console.error(
-        'Erreur chargement films :',
-        err
-      );
+        const [
+          result,
+          count,
+        ] =
+          await Promise.all([
+            getMoviesFromDatabase(
+              categoryId,
+              PAGE_SIZE,
+              0,
+            ),
 
-      setMovies([]);
-      setTotalMovies(0);
-      setHasMore(false);
+            getMoviesCountFromDatabase(
+              categoryId,
+            ),
+          ]);
 
-      setError(
-        'Impossible de charger les films.'
-      );
-    } finally {
-      setLoadingMovies(false);
-    }
-  };
+        /*
+         * Respect de la limite du compte.
+         */
+        const limitedResult =
+          result.slice(
+            0,
+            effectiveLimit,
+          );
+
+        const limitedCount =
+          Math.min(
+            count,
+            effectiveLimit,
+          );
+
+        setMovies(
+          limitedResult,
+        );
+
+        setTotalMovies(
+          limitedCount,
+        );
+
+        setFailedImages([]);
+
+        setHasMore(
+          limitedResult.length <
+            limitedCount,
+        );
+      } catch (err) {
+        console.error(
+          'Erreur chargement films :',
+          err,
+        );
+
+        setMovies([]);
+        setTotalMovies(0);
+        setHasMore(false);
+
+        setError(
+          'Impossible de charger les films.',
+        );
+      } finally {
+        setLoadingMovies(
+          false,
+        );
+      }
+    };
 
   /*
    * ---------------------------------------------------------------
@@ -557,101 +798,181 @@ export default function MoviesScreen() {
    * ---------------------------------------------------------------
    */
 
-  const loadMoreMovies = useCallback(
-    async () => {
-      if (loadingMoreRef.current) {
-        return;
-      }
-
-      if (
-        loadingMore ||
-        loadingMovies ||
-        !hasMore
-      ) {
-        return;
-      }
-
-      loadingMoreRef.current = true;
-      setLoadingMore(true);
-
-      try {
-        const offset = movies.length;
-
-        let result: Movie[] = [];
-
+  const loadMoreMovies =
+    useCallback(
+      async () => {
         if (
-          searchText.trim() !== ''
+          loadingMoreRef.current
         ) {
-          result =
-            await searchMoviesFromDatabase(
-              searchText,
-              activeCategory,
-              SEARCH_PAGE_SIZE,
-              offset
-            );
-        } else {
-          result =
-            await getMoviesFromDatabase(
-              activeCategory,
-              PAGE_SIZE,
-              offset
-            );
+          return;
         }
 
-        if (result.length === 0) {
+        if (
+          loadingMore ||
+          loadingMovies ||
+          !hasMore
+        ) {
+          return;
+        }
+
+        /*
+         * Aucun accès.
+         */
+        if (
+          moviesLimit <= 0
+        ) {
           setHasMore(false);
           return;
         }
 
-        setMovies(previous => {
-          const existingIds = new Set(
-            previous.map(
-              movie =>
-                movie.stream_id
-            )
-          );
+        /*
+         * Limite déjà atteinte.
+         */
+        if (
+          movies.length >=
+          moviesLimit
+        ) {
+          setHasMore(false);
+          return;
+        }
 
-          const newMovies =
-            result.filter(
-              movie =>
-                !existingIds.has(
-                  movie.stream_id
-                )
+        const remaining =
+          moviesLimit -
+          movies.length;
+
+        if (
+          remaining <= 0
+        ) {
+          setHasMore(false);
+          return;
+        }
+
+        loadingMoreRef.current =
+          true;
+
+        setLoadingMore(true);
+
+        try {
+          const offset =
+            movies.length;
+
+          let result: Movie[] =
+            [];
+
+          /*
+           * Recherche.
+           */
+          if (
+            searchText.trim() !==
+            ''
+          ) {
+            result =
+              await searchMoviesFromDatabase(
+                searchText,
+                activeCategory,
+                Math.min(
+                  SEARCH_PAGE_SIZE,
+                  remaining,
+                ),
+                offset,
+              );
+          } else {
+            /*
+             * Catalogue normal.
+             */
+            result =
+              await getMoviesFromDatabase(
+                activeCategory,
+                Math.min(
+                  PAGE_SIZE,
+                  remaining,
+                ),
+                offset,
+              );
+          }
+
+          if (
+            result.length === 0
+          ) {
+            setHasMore(false);
+            return;
+          }
+
+          /*
+           * Sécurité :
+           * ne jamais dépasser la limite.
+           */
+          const limitedResult =
+            result.slice(
+              0,
+              remaining,
             );
 
-          return [
-            ...previous,
-            ...newMovies,
-          ];
-        });
+          setMovies(
+            previous => {
+              const existingIds =
+                new Set(
+                  previous.map(
+                    movie =>
+                      movie.stream_id,
+                  ),
+                );
 
-        const newTotal =
-          movies.length +
-          result.length;
+              const newMovies =
+                limitedResult.filter(
+                  movie =>
+                    !existingIds.has(
+                      movie.stream_id,
+                    ),
+                );
 
-        setHasMore(
-          newTotal < totalMovies
-        );
-      } catch (err) {
-        console.error(
-          'Erreur chargement page suivante :',
-          err
-        );
-      } finally {
-        loadingMoreRef.current = false;
-        setLoadingMore(false);
-      }
-    },
-    [
-      loadingMore,
-      loadingMovies,
-      hasMore,
-      movies.length,
-      activeCategory,
-      totalMovies,
-      searchText,
-    ]
-  );
+              return [
+                ...previous,
+                ...newMovies,
+              ].slice(
+                0,
+                moviesLimit,
+              );
+            },
+          );
+
+          const newTotal =
+            Math.min(
+              movies.length +
+                limitedResult.length,
+              moviesLimit,
+            );
+
+          setHasMore(
+            newTotal <
+              Math.min(
+                totalMovies,
+                moviesLimit,
+              ),
+          );
+        } catch (err) {
+          console.error(
+            'Erreur chargement page suivante :',
+            err,
+          );
+        } finally {
+          loadingMoreRef.current =
+            false;
+
+          setLoadingMore(false);
+        }
+      },
+      [
+        loadingMore,
+        loadingMovies,
+        hasMore,
+        movies.length,
+        moviesLimit,
+        activeCategory,
+        totalMovies,
+        searchText,
+      ],
+    );
 
   /*
    * ---------------------------------------------------------------
@@ -662,21 +983,25 @@ export default function MoviesScreen() {
   const handleCategorySelect =
     useCallback(
       async (
-        categoryId: string
+        categoryId: string,
       ) => {
         searchRequestRef.current++;
 
         setActiveCategory(
-          categoryId
+          categoryId,
         );
 
         setSearchText('');
 
-        loadingMoreRef.current = false;
+        loadingMoreRef.current =
+          false;
 
-        await loadMovies(categoryId);
+        await loadMovies(
+          categoryId,
+          moviesLimit,
+        );
       },
-      []
+      [moviesLimit],
     );
 
   /*
@@ -687,12 +1012,14 @@ export default function MoviesScreen() {
 
   const handleImageError =
     useCallback(
-      (streamId: number) => {
+      (
+        streamId: number,
+      ) => {
         setFailedImages(
           previous => {
             if (
               previous.includes(
-                streamId
+                streamId,
               )
             ) {
               return previous;
@@ -702,10 +1029,10 @@ export default function MoviesScreen() {
               ...previous,
               streamId,
             ];
-          }
+          },
         );
       },
-      []
+      [],
     );
 
   /*
@@ -716,16 +1043,20 @@ export default function MoviesScreen() {
 
   const handleMoviePress =
     useCallback(
-      (streamId: number) => {
+      (
+        streamId: number,
+      ) => {
         router.push({
           pathname:
             '/movie/[id]',
           params: {
-            id: String(streamId),
+            id: String(
+              streamId,
+            ),
           },
         });
       },
-      []
+      [],
     );
 
   /*
@@ -743,7 +1074,7 @@ export default function MoviesScreen() {
       }) => {
         const imageFailed =
           failedImages.includes(
-            item.stream_id
+            item.stream_id,
           );
 
         return (
@@ -765,20 +1096,30 @@ export default function MoviesScreen() {
         failedImages,
         handleImageError,
         handleMoviePress,
-      ]
+      ],
     );
 
+  /*
+   * ---------------------------------------------------------------
+   * CATÉGORIES
+   * ---------------------------------------------------------------
+   */
+
   const categoryItems =
-    categories.map(category => ({
-      id: category.category_id,
-      name: category.category_name,
-    }));
+    categories.map(
+      category => ({
+        id:
+          category.category_id,
+        name:
+          category.category_name,
+      }),
+    );
 
   const categoryName =
     categories.find(
       category =>
         category.category_id ===
-        activeCategory
+        activeCategory,
     )?.category_name ||
     'Films';
 
@@ -788,94 +1129,108 @@ export default function MoviesScreen() {
    * ---------------------------------------------------------------
    */
 
-  const getSyncText = () => {
-    if (!syncProgress) {
-      return 'Connexion à Xtream...';
-    }
+  const getSyncText =
+    () => {
+      if (!syncProgress) {
+        return 'Connexion à Xtream...';
+      }
 
-    switch (
-      syncProgress.phase
-    ) {
-      case 'checking':
-        return 'Vérification du catalogue...';
+      switch (
+        syncProgress.phase
+      ) {
+        case 'checking':
+          return 'Vérification du catalogue...';
 
-      case 'syncing':
-        if (
-          syncProgress.total > 0
-        ) {
-          return `Synchronisation : ${syncProgress.current}/${syncProgress.total}`;
-        }
+        case 'syncing':
+          if (
+            syncProgress.total >
+            0
+          ) {
+            return `Synchronisation : ${syncProgress.current}/${syncProgress.total}`;
+          }
 
-        return 'Synchronisation des films...';
+          return 'Synchronisation des films...';
 
-      case 'deleting':
-        return `Nettoyage : ${syncProgress.current}/${syncProgress.total}`;
+        case 'deleting':
+          return `Nettoyage : ${syncProgress.current}/${syncProgress.total}`;
 
-      case 'done':
-        if (
-          syncProgress.added > 0 ||
-          syncProgress.updated > 0 ||
-          syncProgress.deleted > 0
-        ) {
-          return 'Catalogue mis à jour';
-        }
+        case 'done':
+          if (
+            syncProgress.added >
+              0 ||
+            syncProgress.updated >
+              0 ||
+            syncProgress.deleted >
+              0
+          ) {
+            return 'Catalogue mis à jour';
+          }
 
-        return 'Catalogue déjà à jour';
+          return 'Catalogue déjà à jour';
 
-      default:
-        return 'Synchronisation...';
-    }
-  };
+        default:
+          return 'Synchronisation...';
+      }
+    };
 
   /*
    * ---------------------------------------------------------------
-   * FOOTER PAGINATION
+   * FOOTER
    * ---------------------------------------------------------------
    */
 
-  const renderFooter = () => {
-    if (loadingMore) {
-      return (
-        <View
-          style={styles.footer}
-        >
-          <ActivityIndicator
-            size="small"
-            color="#E50914"
-          />
-
-          <Text
-            style={styles.footerText}
+  const renderFooter =
+    () => {
+      if (loadingMore) {
+        return (
+          <View
+            style={
+              styles.footer
+            }
           >
-            Chargement...
-          </Text>
-        </View>
-      );
-    }
+            <ActivityIndicator
+              size="small"
+              color="#E50914"
+            />
 
-    if (
-      !hasMore &&
-      movies.length > 0
-    ) {
-      return (
-        <View
-          style={styles.footer}
-        >
-          <Text
-            style={styles.endText}
+            <Text
+              style={
+                styles.footerText
+              }
+            >
+              Chargement...
+            </Text>
+          </View>
+        );
+      }
+
+      if (
+        !hasMore &&
+        movies.length > 0
+      ) {
+        return (
+          <View
+            style={
+              styles.footer
+            }
           >
-            Tous les films sont chargés
-          </Text>
-        </View>
-      );
-    }
+            <Text
+              style={
+                styles.endText
+              }
+            >
+              Tous les films sont chargés
+            </Text>
+          </View>
+        );
+      }
 
-    return null;
-  };
+      return null;
+    };
 
   /*
    * ---------------------------------------------------------------
-   * ÉCRAN DE CHARGEMENT INITIAL
+   * CHARGEMENT INITIAL
    * ---------------------------------------------------------------
    */
 
@@ -885,10 +1240,14 @@ export default function MoviesScreen() {
   ) {
     return (
       <SafeAreaView
-        style={styles.container}
+        style={
+          styles.container
+        }
       >
         <View
-          style={styles.loadingScreen}
+          style={
+            styles.loadingScreen
+          }
         >
           <ActivityIndicator
             size="large"
@@ -896,10 +1255,85 @@ export default function MoviesScreen() {
           />
 
           <Text
-            style={styles.loadingText}
+            style={
+              styles.loadingText
+            }
           >
-            Chargement des catégories...
+            Vérification des accès...
           </Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  /*
+   * ---------------------------------------------------------------
+   * ACCÈS REFUSÉ
+   * ---------------------------------------------------------------
+   */
+
+  if (
+    accessChecked &&
+    moviesLimit <= 0
+  ) {
+    return (
+      <SafeAreaView
+        style={
+          styles.container
+        }
+      >
+        <View
+          style={
+            styles.loadingScreen
+          }
+        >
+          <Text
+            style={
+              styles.emptyIcon
+            }
+          >
+            🔒
+          </Text>
+
+          <Text
+            style={
+              styles.emptyTitle
+            }
+          >
+            Accès aux films indisponible
+          </Text>
+
+          <Text
+            style={
+              styles.emptyText
+            }
+          >
+            Votre abonnement ne permet pas
+            actuellement d'accéder aux films.
+          </Text>
+
+          <Pressable
+            style={{
+              marginTop: 20,
+              backgroundColor:
+                '#E50914',
+              paddingHorizontal: 24,
+              paddingVertical: 12,
+              borderRadius: 10,
+            }}
+            onPress={() =>
+              router.back()
+            }
+          >
+            <Text
+              style={{
+                color: '#FFFFFF',
+                fontWeight: '700',
+              }}
+            >
+              Retour
+            </Text>
+          </Pressable>
         </View>
       </SafeAreaView>
     );
@@ -913,9 +1347,13 @@ export default function MoviesScreen() {
 
   return (
     <SafeAreaView
-      style={styles.container}
+      style={
+        styles.container
+      }
     >
-      <View style={styles.header}>
+      <View
+        style={styles.header}
+      >
         <Pressable
           style={
             styles.backButton
@@ -960,7 +1398,7 @@ export default function MoviesScreen() {
 
       {/*
        * -----------------------------------------------------------
-       * BARRE DE SYNCHRONISATION
+       * BARRE SYNCHRONISATION
        * -----------------------------------------------------------
        */}
 
@@ -998,7 +1436,8 @@ export default function MoviesScreen() {
             }
           >
             {syncProgress &&
-            syncProgress.total > 0 ? (
+            syncProgress.total >
+              0 ? (
               <View
                 style={[
                   styles.progressBar,
@@ -1008,8 +1447,8 @@ export default function MoviesScreen() {
                       Math.round(
                         (syncProgress.current /
                           syncProgress.total) *
-                          100
-                      )
+                          100,
+                      ),
                     )}%`,
                   },
                 ]}
@@ -1024,7 +1463,8 @@ export default function MoviesScreen() {
           </View>
 
           {syncProgress &&
-          syncProgress.total > 0 ? (
+          syncProgress.total >
+            0 ? (
             <Text
               style={
                 styles.syncPercentage
@@ -1033,13 +1473,19 @@ export default function MoviesScreen() {
               {Math.round(
                 (syncProgress.current /
                   syncProgress.total) *
-                  100
+                  100,
               )}
               %
             </Text>
           ) : null}
         </View>
       ) : null}
+
+      {/*
+       * -----------------------------------------------------------
+       * RECHERCHE
+       * -----------------------------------------------------------
+       */}
 
       <View
         style={
@@ -1095,8 +1541,16 @@ export default function MoviesScreen() {
         }
       />
 
+      {/*
+       * -----------------------------------------------------------
+       * INFORMATIONS
+       * -----------------------------------------------------------
+       */}
+
       <View
-        style={styles.infoRow}
+        style={
+          styles.infoRow
+        }
       >
         <Text
           style={
@@ -1120,6 +1574,12 @@ export default function MoviesScreen() {
         ) : null}
       </View>
 
+      {/*
+       * -----------------------------------------------------------
+       * ERREUR
+       * -----------------------------------------------------------
+       */}
+
       {error ? (
         <View
           style={
@@ -1136,6 +1596,12 @@ export default function MoviesScreen() {
         </View>
       ) : null}
 
+      {/*
+       * -----------------------------------------------------------
+       * LISTE
+       * -----------------------------------------------------------
+       */}
+
       <FlatList
         data={movies}
         renderItem={
@@ -1143,7 +1609,7 @@ export default function MoviesScreen() {
         }
         keyExtractor={item =>
           String(
-            item.stream_id
+            item.stream_id,
           )
         }
         numColumns={2}
@@ -1212,323 +1678,3 @@ export default function MoviesScreen() {
     </SafeAreaView>
   );
 }
-
-/*
-|--------------------------------------------------------------------------
-| STYLES
-|--------------------------------------------------------------------------
-*/
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#080808',
-  },
-
-  header: {
-    height: 70,
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-  },
-
-  backButton: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: '#171717',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
-  backButtonText: {
-    color: '#FFFFFF',
-    fontSize: 34,
-    lineHeight: 38,
-    marginTop: -4,
-  },
-
-  headerTextContainer: {
-    flex: 1,
-    alignItems: 'center',
-  },
-
-  title: {
-    color: '#FFFFFF',
-    fontSize: 22,
-    fontWeight: '800',
-    letterSpacing: 1,
-  },
-
-  subtitle: {
-    color: '#777777',
-    fontSize: 12,
-    marginTop: 2,
-  },
-
-  headerSpacer: {
-    width: 42,
-  },
-
-  /*
-   * Synchronisation
-   */
-
-  syncContainer: {
-    marginHorizontal: 20,
-    marginBottom: 12,
-    padding: 12,
-    backgroundColor: '#121212',
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#242424',
-  },
-
-  syncHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 8,
-  },
-
-  syncTitle: {
-    color: '#FFFFFF',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-
-  syncText: {
-    color: '#888888',
-    fontSize: 11,
-    flexShrink: 1,
-    marginLeft: 10,
-  },
-
-  progressBackground: {
-    height: 6,
-    backgroundColor: '#292929',
-    borderRadius: 3,
-    overflow: 'hidden',
-  },
-
-  progressBar: {
-    height: '100%',
-    backgroundColor: '#E50914',
-    borderRadius: 3,
-  },
-
-  progressIndeterminate: {
-    width: '35%',
-    height: '100%',
-    backgroundColor: '#E50914',
-    borderRadius: 3,
-  },
-
-  syncPercentage: {
-    color: '#777777',
-    fontSize: 10,
-    textAlign: 'right',
-    marginTop: 5,
-  },
-
-  searchContainer: {
-    marginHorizontal: 20,
-    marginBottom: 14,
-    position: 'relative',
-  },
-
-  searchInput: {
-    height: 48,
-    backgroundColor: '#151515',
-    borderRadius: 24,
-    borderWidth: 1,
-    borderColor: '#292929',
-    color: '#FFFFFF',
-    paddingHorizontal: 18,
-    paddingRight: 50,
-    fontSize: 15,
-  },
-
-  clearSearch: {
-    position: 'absolute',
-    right: 8,
-    top: 8,
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: '#292929',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
-  clearSearchText: {
-    color: '#FFFFFF',
-    fontSize: 24,
-    lineHeight: 27,
-  },
-
-  infoRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    marginBottom: 10,
-  },
-
-  resultCount: {
-    color: '#777777',
-    fontSize: 13,
-  },
-
-  movieList: {
-    paddingHorizontal: 12,
-    paddingBottom: 30,
-  },
-
-  movieListEmpty: {
-    flexGrow: 1,
-  },
-
-  row: {
-    justifyContent: 'space-between',
-  },
-
-  movieCard: {
-    width: '48%',
-    marginBottom: 18,
-  },
-
-  movieCardPressed: {
-    opacity: 0.7,
-    transform: [
-      {
-        scale: 0.98,
-      },
-    ],
-  },
-
-  posterContainer: {
-    width: '100%',
-    aspectRatio: 0.67,
-    borderRadius: 10,
-    overflow: 'hidden',
-    backgroundColor: '#151515',
-    position: 'relative',
-  },
-
-  poster: {
-    width: '100%',
-    height: '100%',
-  },
-
-  posterFallback: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#171717',
-  },
-
-  posterFallbackIcon: {
-    fontSize: 42,
-  },
-
-  ratingBadge: {
-    position: 'absolute',
-    right: 7,
-    top: 7,
-    backgroundColor: 'rgba(0,0,0,0.8)',
-    paddingHorizontal: 7,
-    paddingVertical: 4,
-    borderRadius: 6,
-  },
-
-  ratingText: {
-    color: '#FFFFFF',
-    fontSize: 11,
-    fontWeight: '700',
-  },
-
-  movieTitle: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: '600',
-    marginTop: 8,
-    lineHeight: 19,
-  },
-
-  extension: {
-    color: '#666666',
-    fontSize: 10,
-    fontWeight: '600',
-    marginTop: 3,
-  },
-
-  footer: {
-    height: 70,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-  },
-
-  footerText: {
-    color: '#777777',
-    fontSize: 12,
-  },
-
-  endText: {
-    color: '#555555',
-    fontSize: 12,
-  },
-
-  loadingScreen: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
-  loadingText: {
-    color: '#777777',
-    marginTop: 12,
-    fontSize: 14,
-  },
-
-  errorContainer: {
-    marginHorizontal: 20,
-    marginBottom: 10,
-    padding: 12,
-    backgroundColor: '#2A0D0D',
-    borderRadius: 8,
-  },
-
-  errorText: {
-    color: '#FF6B6B',
-    fontSize: 13,
-    textAlign: 'center',
-  },
-
-  emptyContainer: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 30,
-  },
-
-  emptyIcon: {
-    fontSize: 50,
-    marginBottom: 15,
-  },
-
-  emptyTitle: {
-    color: '#FFFFFF',
-    fontSize: 18,
-    fontWeight: '700',
-    marginBottom: 8,
-  },
-
-  emptyText: {
-    color: '#666666',
-    fontSize: 13,
-    textAlign: 'center',
-    lineHeight: 19,
-  },
-});

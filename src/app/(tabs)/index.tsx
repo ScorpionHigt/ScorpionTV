@@ -1,21 +1,32 @@
 ﻿import {
   ActivityIndicator,
   Pressable,
-  StyleSheet,
   Text,
   View,
   ScrollView,
 } from 'react-native';
+import { registerFCMToken } from '../../api/authApi';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
-
+import { homeStyles as styles } from '../../styles/homeStyles';
+import {
+  registerForPushNotificationsAsync,
+} from '../../services/notifications';
 import {
   APP_NAME,
   APP_VERSION,
   APP_YEAR,
 } from '../../constants/app';
-
+import UpdateModal from '../../components/UpdateModal';
+import {
+  checkForAppUpdate,
+  downloadAppUpdate,
+  installAppUpdate,
+} from '../../services/appUpdater';
+import {
+  AppVersionResponse,
+} from '../../api/appVersion';
 import { initDatabase } from '../../database/database';
 
 import { useDialog } from '../../components/dialogs/DialogProvider';
@@ -36,6 +47,26 @@ import {
 
 export default function HomeScreen() {
   const { showDialog } = useDialog();
+  const [updateInfo, setUpdateInfo] =
+    useState<AppVersionResponse | null>(null);
+
+  const [updateModalVisible, setUpdateModalVisible] =
+    useState(false);
+
+  const [downloadingUpdate, setDownloadingUpdate] =
+    useState(false);
+
+  const [downloadProgress, setDownloadProgress] =
+     useState(0);
+
+  const [downloadedBytes, setDownloadedBytes] =
+     useState(0);
+
+  const [totalBytes, setTotalBytes] =
+     useState(0);
+
+  const [downloadedApkUri, setDownloadedApkUri] =
+     useState<string | null>(null);
 
   const [checkingAccess, setCheckingAccess] =
     useState(true);
@@ -72,21 +103,30 @@ export default function HomeScreen() {
          * Récupération du token
          * ------------------------------------------------
          */
-        const token = await getAuthToken();
+         const fcmToken =
+            await registerForPushNotificationsAsync();
 
-        console.log(
-          'VÉRIFICATION TOKEN :',
-          token
-            ? 'TOKEN PRÉSENT'
-            : 'AUCUN TOKEN',
-        );
+            if (fcmToken) {
+              console.log(
+                'NOTIFICATIONS : token FCM récupéré.'
+              );
+
+              const registered =
+                await registerFCMToken(fcmToken);
+
+              if (registered) {
+                console.log(
+                  'NOTIFICATIONS : token FCM synchronisé avec le serveur.'
+                );
+              }
+            }
 
         /*
          * ------------------------------------------------
          * Aucun token
          * ------------------------------------------------
          */
-        if (!token) {
+        if (!fcmToken) {
           console.log(
             'TOKEN ABSENT → REDIRECTION LOGIN',
           );
@@ -273,7 +313,6 @@ export default function HomeScreen() {
 
           return;
         }
-
         /*
          * ------------------------------------------------
          * Erreur réseau / serveur
@@ -295,16 +334,85 @@ export default function HomeScreen() {
     },
     [showDialog],
   );
-
   /*
    * ------------------------------------------------------
    * Initialisation
    * ------------------------------------------------------
    */
-  useEffect(() => {
-    checkUserAccess();
-  }, [checkUserAccess]);
+   useEffect(() => {
+  checkUserAccess();
+}, [checkUserAccess]);
 
+/* Vérification et inscription aux notifications push */
+useEffect(() => {
+  let mounted = true;
+
+  const registerNotifications = async () => {
+    console.log(
+      'NOTIFICATIONS : enregistrement au démarrage de ScorpionTV...'
+    );
+
+    const fcmToken =
+      await registerForPushNotificationsAsync();
+
+    if (!mounted || !fcmToken) {
+      return;
+    }
+
+    console.log(
+      'NOTIFICATIONS : token FCM récupéré.'
+    );
+
+    const registered =
+      await registerFCMToken(fcmToken);
+
+    if (!mounted) {
+      return;
+    }
+
+    if (registered) {
+      console.log(
+        'NOTIFICATIONS : token FCM synchronisé avec le serveur.'
+      );
+    }
+  };
+
+  void registerNotifications();
+
+  return () => {
+    mounted = false;
+  };
+}, []);
+
+/* Vérification de mise à jour */
+useEffect(() => {
+  let mounted = true;
+
+  const checkUpdate = async () => {
+    console.log(
+      'APP UPDATE : démarrage de la vérification...'
+    );
+
+    const result = await checkForAppUpdate();
+
+    if (!mounted || !result) {
+      return;
+    }
+
+    setUpdateInfo(result);
+    setUpdateModalVisible(true);
+
+    console.log(
+      'APP UPDATE : fenêtre de mise à jour affichée.'
+    );
+  };
+
+  void checkUpdate();
+
+  return () => {
+    mounted = false;
+  };
+}, []);
   /*
    * ------------------------------------------------------
    * M3U
@@ -538,148 +646,99 @@ export default function HomeScreen() {
           {APP_NAME} • v{APP_VERSION} © {APP_YEAR}
         </Text>
       </SafeAreaView>
+            <UpdateModal
+          visible={updateModalVisible}
+          updateInfo={updateInfo}
+
+          downloading={downloadingUpdate}
+          downloaded={!!downloadedApkUri}
+
+          downloadProgress={downloadProgress}
+          downloadedBytes={downloadedBytes}
+          totalBytes={totalBytes}
+
+          onUpdate={() => {
+            if (!updateInfo || downloadingUpdate) {
+              return;
+            }
+
+            console.log(
+              'APP UPDATE : téléchargement demandé.'
+            );
+
+            setDownloadingUpdate(true);
+            setDownloadProgress(0);
+            setDownloadedBytes(0);
+            setTotalBytes(0);
+            setDownloadedApkUri(null);
+
+            void downloadAppUpdate(
+              updateInfo,
+              {
+                onProgress: ({
+                  progress,
+                  downloadedBytes: currentDownloadedBytes,
+                  totalBytes: currentTotalBytes,
+                }) => {
+                  setDownloadProgress(progress);
+
+                  setDownloadedBytes(
+                    currentDownloadedBytes,
+                  );
+
+                  setTotalBytes(
+                    currentTotalBytes,
+                  );
+                },
+              },
+            ).then((uri) => {
+              if (!uri) {
+                console.log(
+                  'APP UPDATE : téléchargement échoué.'
+                );
+
+                setDownloadingUpdate(false);
+
+                return;
+              }
+
+              console.log(
+                'APP UPDATE : APK prêt :',
+                uri,
+              );
+
+              setDownloadedApkUri(uri);
+              setDownloadingUpdate(false);
+              setDownloadProgress(1);
+            });
+          }}
+
+          onInstall={() => {
+            if (!downloadedApkUri) {
+              console.log(
+                'APP UPDATE : aucun APK disponible pour installation.'
+              );
+
+              return;
+            }
+
+            console.log(
+              'APP UPDATE : installation demandée.'
+            );
+
+            void installAppUpdate(
+              downloadedApkUri,
+            );
+          }}
+
+          onLater={() => {
+            console.log(
+              'APP UPDATE : utilisateur choisit Plus tard.'
+            );
+
+            setUpdateModalVisible(false);
+          }}
+        />
     </ScrollView>
   );
 }
-
-const styles = StyleSheet.create({
-  loadingContainer: {
-    flex: 1,
-    backgroundColor: '#080808',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-
-  loadingText: {
-    color: '#777777',
-    fontSize: 14,
-    marginTop: 15,
-  },
-
-  safeArea: {
-    flex: 1,
-  },
-
-  content: {
-    paddingHorizontal: 20,
-    paddingTop: 25,
-    paddingBottom: 30,
-  },
-
-  header: {
-    paddingHorizontal: 24,
-    paddingTop: 20,
-    alignItems: 'center',
-  },
-
-  logo: {
-    color: '#FFFFFF',
-    fontSize: 30,
-    fontWeight: '900',
-    letterSpacing: 3,
-  },
-
-  subtitle: {
-    color: '#E50914',
-    fontSize: 18,
-    fontWeight: '800',
-    letterSpacing: 5,
-    marginTop: -4,
-  },
-
-  welcome: {
-    color: '#FFFFFF',
-    fontSize: 32,
-    fontWeight: '800',
-    textAlign: 'center',
-  },
-
-  description: {
-    color: '#999999',
-    fontSize: 16,
-    textAlign: 'center',
-    marginTop: 8,
-    marginBottom: 28,
-  },
-
-  menu: {
-    gap: 12,
-  },
-
-  card: {
-    backgroundColor: '#151515',
-    borderRadius: 16,
-    padding: 18,
-    minHeight: 100,
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#252525',
-  },
-
-  m3uCard: {
-    borderColor: '#333333',
-  },
-
-  cardPressed: {
-    opacity: 0.75,
-    transform: [
-      {
-        scale: 0.98,
-      },
-    ],
-  },
-
-  icon: {
-    fontSize: 28,
-    marginBottom: 6,
-  },
-
-  cardTitle: {
-    color: '#FFFFFF',
-    fontSize: 20,
-    fontWeight: '800',
-  },
-
-  cardDescription: {
-    color: '#888888',
-    fontSize: 13,
-    marginTop: 4,
-  },
-
-  m3uTitleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-
-  comingSoon: {
-    backgroundColor: '#252525',
-    borderRadius: 6,
-    paddingHorizontal: 7,
-    paddingVertical: 3,
-  },
-
-  comingSoonText: {
-    color: '#E50914',
-    fontSize: 9,
-    fontWeight: '900',
-  },
-
-  email: {
-    color: '#555555',
-    textAlign: 'center',
-    marginBottom: 5,
-    fontSize: 11,
-  },
-
-  version: {
-    color: '#444444',
-    textAlign: 'center',
-    marginBottom: 15,
-    fontSize: 12,
-  },
-
-  scrollView: {
-    flex: 1,
-  },
-});

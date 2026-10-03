@@ -1,4 +1,5 @@
 ﻿import { router } from 'expo-router';
+
 import {
   ActivityIndicator,
   Pressable,
@@ -8,15 +9,20 @@ import {
   Text,
   View,
 } from 'react-native';
+
 import { logout } from '../../api/authApi';
 import { SafeAreaView } from 'react-native-safe-area-context';
+
 import { useCallback, useEffect, useState } from 'react';
+
 import {
   APP_NAME,
   APP_VERSION,
   APP_YEAR,
 } from '../../constants/app';
+
 import NotificationBell from '../../components/NotificationBell';
+
 import {
   getAuthUser,
   clearAuthSession,
@@ -28,15 +34,27 @@ import {
   Subscription,
 } from '../../api/userSubscriptionApi';
 
+import {
+  getCachedUserAccess,
+  clearUserAccessCache,
+} from '../../api/accessApi';
+
 const RED = '#E50914';
 
 export default function ProfileScreen() {
   const [user, setUser] = useState<AuthUser | null>(null);
+
   const [subscription, setSubscription] =
     useState<Subscription | null>(null);
 
+  const [accessAdult, setAccessAdult] =
+    useState(false);
+
   const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
+
+  const [refreshing, setRefreshing] =
+    useState(false);
+
   const [subscriptionError, setSubscriptionError] =
     useState<string | null>(null);
 
@@ -53,6 +71,24 @@ export default function ProfileScreen() {
 
       setUser(currentUser);
 
+      // ---------------------------------------------------------
+      // Récupérer les droits de l'utilisateur depuis le cache
+      // ---------------------------------------------------------
+      const userAccess = getCachedUserAccess();
+
+      const adultAccess: boolean =
+        userAccess?.limits?.adult === true;
+
+       setAccessAdult(adultAccess);
+
+       console.log(
+          'ACCÈS ADULTE PROFIL :',
+          adultAccess,
+       );
+
+      // ---------------------------------------------------------
+      // Récupérer l'abonnement actuel
+      // ---------------------------------------------------------
       const response =
         await getCurrentSubscription(currentUser.id);
 
@@ -85,26 +121,65 @@ export default function ProfileScreen() {
     loadProfile();
   };
 
- 
-const handleLogout = async () => {
-  try {
-    console.log('DÉCONNEXION EN COURS...');
+  // ---------------------------------------------------------
+  // DÉCONNEXION
+  // ---------------------------------------------------------
+  const handleLogout = async () => {
+    try {
+      console.log(
+        'DÉCONNEXION EN COURS...'
+      );
 
-    await logout();
+      // Déconnexion côté serveur
+      await logout();
 
-    console.log('DÉCONNEXION TERMINÉE');
+      console.log(
+        'DÉCONNEXION SERVEUR TERMINÉE'
+      );
+    } catch (error) {
+      console.error(
+        'ERREUR DÉCONNEXION SERVEUR :',
+        error
+      );
+    } finally {
+      // -------------------------------------------------------
+      // Vider la session locale
+      // -------------------------------------------------------
+      try {
+        await clearAuthSession();
 
-    router.replace('/login');
-  } catch (error) {
-    console.error(
-      'ERREUR DÉCONNEXION :',
-      error,
-    );
+        console.log(
+          'SESSION LOCALE SUPPRIMÉE'
+        );
+      } catch (error) {
+        console.error(
+          'ERREUR SUPPRESSION SESSION LOCALE :',
+          error
+        );
+      }
 
-    router.replace('/login');
-  }
-};
+      // -------------------------------------------------------
+      // Vider le cache des droits utilisateur
+      // -------------------------------------------------------
+      try {
+        clearUserAccessCache();
 
+        console.log(
+          'CACHE DES DROITS UTILISATEUR SUPPRIMÉ'
+        );
+      } catch (error) {
+        console.error(
+          'ERREUR SUPPRESSION CACHE USER ACCESS :',
+          error
+        );
+      }
+
+      // -------------------------------------------------------
+      // Retour à la connexion
+      // -------------------------------------------------------
+      router.replace('/login');
+    }
+  };
 
   const formatDate = (date: string) => {
     const parsedDate = new Date(date);
@@ -123,8 +198,12 @@ const handleLogout = async () => {
     );
   };
 
-  const getRemainingDays = (endDate: string) => {
-    const end = new Date(endDate).getTime();
+  const getRemainingDays = (
+    endDate: string
+  ) => {
+    const end =
+      new Date(endDate).getTime();
+
     const now = Date.now();
 
     const difference = end - now;
@@ -134,20 +213,27 @@ const handleLogout = async () => {
     }
 
     return Math.ceil(
-      difference / (1000 * 60 * 60 * 24)
+      difference /
+        (1000 * 60 * 60 * 24)
     );
   };
 
   if (loading) {
     return (
-      <SafeAreaView style={styles.container}>
-        <View style={styles.loadingContainer}>
+      <SafeAreaView
+        style={styles.container}
+      >
+        <View
+          style={styles.loadingContainer}
+        >
           <ActivityIndicator
             size="large"
             color={RED}
           />
 
-          <Text style={styles.loadingText}>
+          <Text
+            style={styles.loadingText}
+          >
             Chargement du profil...
           </Text>
         </View>
@@ -164,16 +250,25 @@ const handleLogout = async () => {
   const email =
     user?.email ?? 'Non renseigné';
 
-  const remainingDays = subscription
-    ? getRemainingDays(subscription.end_date)
-    : 0;
+  const remainingDays =
+    subscription
+      ? getRemainingDays(
+          subscription.end_date
+        )
+      : 0;
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView
+      style={styles.container}
+    >
       <ScrollView
         style={styles.scrollView}
-        contentContainerStyle={styles.content}
-        showsVerticalScrollIndicator={false}
+        contentContainerStyle={
+          styles.content
+        }
+        showsVerticalScrollIndicator={
+          false
+        }
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -182,17 +277,23 @@ const handleLogout = async () => {
           />
         }
       >
-        {/* HEADER */}
+        {/* =====================================================
+            HEADER
+        ===================================================== */}
 
         <View style={styles.header}>
           <View style={styles.headerTop}>
-            <View style={styles.headerSpacer} />
+            <View
+              style={styles.headerSpacer}
+            />
 
             <NotificationBell />
           </View>
 
           <View style={styles.avatar}>
-            <Text style={styles.avatarText}>
+            <Text
+              style={styles.avatarText}
+            >
               👤
             </Text>
           </View>
@@ -201,15 +302,21 @@ const handleLogout = async () => {
             Mon profil
           </Text>
 
-          <Text style={styles.username}>
+          <Text
+            style={styles.username}
+          >
             @{username}
           </Text>
         </View>
 
-        {/* INFORMATIONS */}
+        {/* =====================================================
+            INFORMATIONS PERSONNELLES
+        ===================================================== */}
 
         <View style={styles.card}>
-          <Text style={styles.sectionTitle}>
+          <Text
+            style={styles.sectionTitle}
+          >
             Informations personnelles
           </Text>
 
@@ -218,12 +325,18 @@ const handleLogout = async () => {
               <Text>👤</Text>
             </View>
 
-            <View style={styles.infoContent}>
-              <Text style={styles.infoLabel}>
+            <View
+              style={styles.infoContent}
+            >
+              <Text
+                style={styles.infoLabel}
+              >
                 Nom d'utilisateur
               </Text>
 
-              <Text style={styles.infoValue}>
+              <Text
+                style={styles.infoValue}
+              >
                 {username}
               </Text>
             </View>
@@ -236,12 +349,18 @@ const handleLogout = async () => {
               <Text>📱</Text>
             </View>
 
-            <View style={styles.infoContent}>
-              <Text style={styles.infoLabel}>
+            <View
+              style={styles.infoContent}
+            >
+              <Text
+                style={styles.infoLabel}
+              >
                 Téléphone
               </Text>
 
-              <Text style={styles.infoValue}>
+              <Text
+                style={styles.infoValue}
+              >
                 {phone}
               </Text>
             </View>
@@ -254,29 +373,45 @@ const handleLogout = async () => {
               <Text>✉️</Text>
             </View>
 
-            <View style={styles.infoContent}>
-              <Text style={styles.infoLabel}>
+            <View
+              style={styles.infoContent}
+            >
+              <Text
+                style={styles.infoLabel}
+              >
                 Email
               </Text>
 
-              <Text style={styles.infoValue}>
+              <Text
+                style={styles.infoValue}
+              >
                 {email}
               </Text>
             </View>
           </View>
         </View>
 
-        {/* ABONNEMENT ACTUEL */}
+        {/* =====================================================
+            ABONNEMENT ACTUEL
+        ===================================================== */}
 
         <View style={styles.card}>
-          <View style={styles.subscriptionHeader}>
-            <Text style={styles.sectionTitle}>
+          <View
+            style={styles.subscriptionHeader}
+          >
+            <Text
+              style={styles.sectionTitle}
+            >
               Mon abonnement
             </Text>
 
             {subscription && (
-              <View style={styles.activeBadge}>
-                <Text style={styles.activeBadgeText}>
+              <View
+                style={styles.activeBadge}
+              >
+                <Text
+                  style={styles.activeBadgeText}
+                >
                   ACTIF
                 </Text>
               </View>
@@ -284,8 +419,14 @@ const handleLogout = async () => {
           </View>
 
           {subscriptionError ? (
-            <View style={styles.subscriptionMessage}>
-              <Text style={styles.errorText}>
+            <View
+              style={
+                styles.subscriptionMessage
+              }
+            >
+              <Text
+                style={styles.errorText}
+              >
                 {subscriptionError}
               </Text>
 
@@ -293,7 +434,9 @@ const handleLogout = async () => {
                 style={styles.retryButton}
                 onPress={loadProfile}
               >
-                <Text style={styles.retryText}>
+                <Text
+                  style={styles.retryText}
+                >
                   Réessayer
                 </Text>
               </Pressable>
@@ -301,52 +444,111 @@ const handleLogout = async () => {
           ) : subscription ? (
             <>
               <View style={styles.planBox}>
-                <View style={styles.planIcon}>
-                  <Text style={styles.planIconText}>
+                <View
+                  style={styles.planIcon}
+                >
+                  <Text
+                    style={
+                      styles.planIconText
+                    }
+                  >
                     👑
                   </Text>
                 </View>
 
-                <View style={styles.planContent}>
-                  <Text style={styles.planName}>
-                    {subscription.plan_name ??
-                      subscription.subscription_type}
-                  </Text>
+                <View
+                  style={styles.planContent}
+                >
+                  <View
+                    style={
+                      styles.planNameRow
+                    }
+                  >
+                    <Text
+                      style={styles.planName}
+                    >
+                      {subscription.plan_name ??
+                        subscription.subscription_type}
+                    </Text>
 
-                  <Text style={styles.planType}>
+                    {/* 🔞 SI ACCESS ADULT */}
+                    {accessAdult && (
+                      <Text
+                        style={
+                          styles.adultIcon
+                        }
+                      >
+                        🔞
+                      </Text>
+                    )}
+                  </View>
+
+                  <Text
+                    style={styles.planType}
+                  >
                     {subscription.subscription_type}
                   </Text>
                 </View>
               </View>
 
-              <View style={styles.subscriptionSeparator} />
+              <View
+                style={
+                  styles.subscriptionSeparator
+                }
+              />
 
-              <View style={styles.subscriptionRow}>
-                <Text style={styles.subscriptionLabel}>
+              <View
+                style={styles.subscriptionRow}
+              >
+                <Text
+                  style={
+                    styles.subscriptionLabel
+                  }
+                >
                   Début
                 </Text>
 
-                <Text style={styles.subscriptionValue}>
+                <Text
+                  style={
+                    styles.subscriptionValue
+                  }
+                >
                   {formatDate(
                     subscription.start_date
                   )}
                 </Text>
               </View>
 
-              <View style={styles.subscriptionRow}>
-                <Text style={styles.subscriptionLabel}>
+              <View
+                style={styles.subscriptionRow}
+              >
+                <Text
+                  style={
+                    styles.subscriptionLabel
+                  }
+                >
                   Expiration
                 </Text>
 
-                <Text style={styles.subscriptionValue}>
+                <Text
+                  style={
+                    styles.subscriptionValue
+                  }
+                >
                   {formatDate(
                     subscription.end_date
                   )}
                 </Text>
               </View>
 
-              <View style={styles.subscriptionRow}>
-                <Text style={styles.subscriptionLabel}>
+              <View
+                style={styles.subscriptionRow}
+              >
+                <Text
+                  style={
+                    styles.subscriptionLabel
+                  }
+                >
                   Temps restant
                 </Text>
 
@@ -364,12 +566,22 @@ const handleLogout = async () => {
                 </Text>
               </View>
 
-              <View style={styles.subscriptionRow}>
-                <Text style={styles.subscriptionLabel}>
+              <View
+                style={styles.subscriptionRow}
+              >
+                <Text
+                  style={
+                    styles.subscriptionLabel
+                  }
+                >
                   Prix
                 </Text>
 
-                <Text style={styles.subscriptionValue}>
+                <Text
+                  style={
+                    styles.subscriptionValue
+                  }
+                >
                   {subscription.price.toLocaleString(
                     'fr-FR'
                   )}{' '}
@@ -379,7 +591,9 @@ const handleLogout = async () => {
               </View>
 
               <Pressable
-                style={styles.subscriptionButton}
+                style={
+                  styles.subscriptionButton
+                }
                 onPress={() =>
                   router.push(
                     '/subscription'
@@ -396,12 +610,24 @@ const handleLogout = async () => {
               </Pressable>
             </>
           ) : (
-            <View style={styles.subscriptionMessage}>
-              <Text style={styles.noSubscriptionIcon}>
+            <View
+              style={
+                styles.subscriptionMessage
+              }
+            >
+              <Text
+                style={
+                  styles.noSubscriptionIcon
+                }
+              >
                 📦
               </Text>
 
-              <Text style={styles.noSubscriptionTitle}>
+              <Text
+                style={
+                  styles.noSubscriptionTitle
+                }
+              >
                 Aucun abonnement actif
               </Text>
 
@@ -415,7 +641,9 @@ const handleLogout = async () => {
               </Text>
 
               <Pressable
-                style={styles.subscriptionButton}
+                style={
+                  styles.subscriptionButton
+                }
                 onPress={() =>
                   router.push(
                     '/subscription'
@@ -434,30 +662,42 @@ const handleLogout = async () => {
           )}
         </View>
 
-        {/* MON ESPACE */}
+        {/* =====================================================
+            MON ESPACE
+        ===================================================== */}
 
         <View style={styles.card}>
-          <Text style={styles.sectionTitle}>
+          <Text
+            style={styles.sectionTitle}
+          >
             Mon espace
           </Text>
 
           <Pressable
             style={styles.menuItem}
             onPress={() =>
-              router.push('/subscription')
+              router.push(
+                '/subscription'
+              )
             }
           >
             <View style={styles.menuIcon}>
               <Text>📦</Text>
             </View>
 
-            <View style={styles.menuContent}>
-              <Text style={styles.menuTitle}>
+            <View
+              style={styles.menuContent}
+            >
+              <Text
+                style={styles.menuTitle}
+              >
                 Mon abonnement
               </Text>
 
               <Text
-                style={styles.menuDescription}
+                style={
+                  styles.menuDescription
+                }
               >
                 Consulte ton abonnement actuel
               </Text>
@@ -471,20 +711,28 @@ const handleLogout = async () => {
           <View style={styles.separator} />
 
           <Pressable
-              style={styles.menuItem}
-              onPress={() => router.push('/orders')}
+            style={styles.menuItem}
+            onPress={() =>
+              router.push('/orders')
+            }
           >
             <View style={styles.menuIcon}>
               <Text>🧾</Text>
             </View>
 
-            <View style={styles.menuContent}>
-              <Text style={styles.menuTitle}>
+            <View
+              style={styles.menuContent}
+            >
+              <Text
+                style={styles.menuTitle}
+              >
                 Mes commandes
               </Text>
 
               <Text
-                style={styles.menuDescription}
+                style={
+                  styles.menuDescription
+                }
               >
                 Historique de tes commandes
               </Text>
@@ -500,20 +748,28 @@ const handleLogout = async () => {
           <Pressable
             style={styles.menuItem}
             onPress={() =>
-              router.push('/notifications')
+              router.push(
+                '/notifications'
+              )
             }
           >
             <View style={styles.menuIcon}>
               <Text>🔔</Text>
             </View>
 
-            <View style={styles.menuContent}>
-              <Text style={styles.menuTitle}>
+            <View
+              style={styles.menuContent}
+            >
+              <Text
+                style={styles.menuTitle}
+              >
                 Notifications
               </Text>
 
               <Text
-                style={styles.menuDescription}
+                style={
+                  styles.menuDescription
+                }
               >
                 Tes messages et alertes
               </Text>
@@ -531,13 +787,19 @@ const handleLogout = async () => {
               <Text>⚙️</Text>
             </View>
 
-            <View style={styles.menuContent}>
-              <Text style={styles.menuTitle}>
+            <View
+              style={styles.menuContent}
+            >
+              <Text
+                style={styles.menuTitle}
+              >
                 Paramètres
               </Text>
 
               <Text
-                style={styles.menuDescription}
+                style={
+                  styles.menuDescription
+                }
               >
                 Gérer les paramètres du compte
               </Text>
@@ -549,13 +811,17 @@ const handleLogout = async () => {
           </Pressable>
         </View>
 
-        {/* DÉCONNEXION */}
+        {/* =====================================================
+            DÉCONNEXION
+        ===================================================== */}
 
         <Pressable
           style={styles.logoutButton}
           onPress={handleLogout}
         >
-          <Text style={styles.logoutButtonText}>
+          <Text
+            style={styles.logoutButtonText}
+          >
             Se déconnecter
           </Text>
         </Pressable>
@@ -730,10 +996,20 @@ const styles = StyleSheet.create({
     marginLeft: 12,
   },
 
+  planNameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+
   planName: {
     color: '#FFFFFF',
     fontSize: 16,
     fontWeight: '800',
+  },
+
+  adultIcon: {
+    fontSize: 18,
+    marginLeft: 8,
   },
 
   planType: {

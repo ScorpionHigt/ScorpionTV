@@ -161,7 +161,7 @@ export class XtreamClient {
         this.server +
         '/player_api.php?' +
         params.toString();
-
+      console.log('🌐 XTREAM REQUEST URL :', url);
       const response =
         await fetch(url);
 

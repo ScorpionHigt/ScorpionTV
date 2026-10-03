@@ -5,14 +5,13 @@
   image_url: string | null;
   price: number;
   currency: string;
+  adult_access: boolean;
   duration_months: number;
   tv_channels_count: number;
   movies_count: number;
   series_count: number;
   is_promotion: boolean;
   is_active: boolean;
-  created_at: string;
-  updated_at: string;
 };
 
 type SubscriptionPlansResponse = {

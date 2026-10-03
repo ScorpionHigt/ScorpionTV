@@ -1,6 +1,9 @@
 ﻿import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useEffect, useState } from 'react';
-import { clearLocalProtection } from '../../storage/localProtectionStorage';
+import { clearLocalProtection,
+  getLocalProtection,
+  verifyLocalProtection,
+} from '../../storage/localProtectionStorage';
 import { router } from 'expo-router';
 import {
   getAuthUser,
@@ -204,7 +207,149 @@ export default function SettingsScreen() {
     });
   };
 
- 
+const handleFactoryReset = () => {
+  showDialog({
+    title: 'Restaurer les valeurs d’usine',
+    message:
+      'Cette action supprimera toutes les données ScorpionTV de cet appareil. Cette opération est irréversible.',
+    icon: '⚠️',
+    buttons: [
+      {
+        label: 'Annuler',
+        variant: 'secondary',
+      },
+      {
+        label: 'Continuer',
+        variant: 'danger',
+        onPress: async () => {
+          try {
+            console.log('VÉRIFICATION DU CODE LOCAL POUR RESET...');
+
+            const protection = await getLocalProtection();
+
+            if (!protection) {
+              showDialog({
+                title: 'Code de sécurité requis',
+                message:
+                  'Aucun code de sécurité local n’est configuré. Configure d’abord un code dans Paramètres → Sécurité.',
+                icon: '🔐',
+              });
+
+              return;
+            }
+
+            showDialog({
+              title: 'Code de sécurité',
+              message:
+                'Saisis ton code de sécurité local pour confirmer la restauration.',
+              icon: '🔐',
+              buttons: [
+                {
+                  label: 'Annuler',
+                  variant: 'secondary',
+                },
+                {
+                  label: 'Confirmer',
+                  variant: 'danger',
+                  onPress: async (value?: string) => {
+                    try {
+                      const code = value?.trim() ?? '';
+
+                      if (!code) {
+                        showDialog({
+                          title: 'Code requis',
+                          message:
+                            'Veuillez saisir votre code de sécurité local.',
+                          icon: '⚠️',
+                        });
+
+                        return;
+                      }
+
+                      console.log(
+                        'VÉRIFICATION DU CODE DE SÉCURITÉ LOCAL...'
+                      );
+
+                      const isValid =
+                        await verifyLocalProtection(code);
+
+                      if (!isValid) {
+                        console.log(
+                          'CODE DE SÉCURITÉ LOCAL INCORRECT'
+                        );
+
+                        showDialog({
+                          title: 'Code incorrect',
+                          message:
+                            'Le code de sécurité local est incorrect. Aucune donnée n’a été supprimée.',
+                          icon: '❌',
+                        });
+
+                        return;
+                      }
+
+                      console.log(
+                        'CODE LOCAL CORRECT — RESTAURATION USINE...'
+                      );
+
+                      await AsyncStorage.clear();
+                      await clearLocalProtection();
+
+                      console.log(
+                        'TOUTES LES DONNÉES LOCALES SUPPRIMÉES'
+                      );
+
+                      showDialog({
+                        title: 'Restauration terminée',
+                        message:
+                          'Toutes les données locales de ScorpionTV ont été supprimées.',
+                        icon: '✅',
+                        buttons: [
+                          {
+                            label: 'OK',
+                            variant: 'primary',
+                            onPress: () => {
+                              router.replace('/login');
+                            },
+                          },
+                        ],
+                      });
+                    } catch (error) {
+                      console.error(
+                        'ERREUR RESTAURATION USINE :',
+                        error
+                      );
+
+                      showDialog({
+                        title: 'Erreur',
+                        message:
+                          'Impossible de restaurer les valeurs d’usine.',
+                        icon: '⚠️',
+                      });
+                    }
+                  },
+                },
+              ],
+            });
+          } catch (error) {
+            console.error(
+              'ERREUR VÉRIFICATION PROTECTION LOCALE :',
+              error
+            );
+
+            showDialog({
+              title: 'Erreur',
+              message:
+                'Impossible de vérifier le code de sécurité local.',
+              icon: '⚠️',
+            });
+          }
+        },
+      },
+    ],
+  });
+}; 
+
 const handleLogout = () => {
   showDialog({
     title: 'Déconnexion',
@@ -279,32 +424,26 @@ const handleLogout = () => {
           <Text style={styles.title}>
             Paramètres
           </Text>
-
           <Text style={styles.subtitle}>
             Personnalise ton expérience ScorpionTV
           </Text>
         </View>
-
         <Text style={styles.category}>
           APPLICATION
         </Text>
-
         <View style={styles.card}>
           <View style={styles.settingRow}>
             <View style={styles.settingIcon}>
               <Text>🔔</Text>
             </View>
-
             <View style={styles.settingContent}>
               <Text style={styles.settingTitle}>
                 Notifications
               </Text>
-
               <Text style={styles.settingDescription}>
                 Recevoir les messages et alertes
               </Text>
             </View>
-
             <Switch
               value={notificationsEnabled}
               onValueChange={setNotificationsEnabled}
@@ -319,24 +458,19 @@ const handleLogout = () => {
               }
             />
           </View>
-
           <View style={styles.separator} />
-
           <View style={styles.settingRow}>
             <View style={styles.settingIcon}>
               <Text>🎨</Text>
             </View>
-
             <View style={styles.settingContent}>
               <Text style={styles.settingTitle}>
                 Mode sombre
               </Text>
-
               <Text style={styles.settingDescription}>
                 Utiliser le thème sombre
               </Text>
             </View>
-
             <Switch
               value={darkModeEnabled}
               onValueChange={setDarkModeEnabled}
@@ -352,27 +486,22 @@ const handleLogout = () => {
             />
           </View>
         </View>
-
         <Text style={styles.category}>
           LECTURE
         </Text>
-
         <View style={styles.card}>
           <View style={styles.settingRow}>
             <View style={styles.settingIcon}>
               <Text>▶️</Text>
             </View>
-
             <View style={styles.settingContent}>
               <Text style={styles.settingTitle}>
                 Lecture automatique
               </Text>
-
               <Text style={styles.settingDescription}>
                 Lire automatiquement les vidéos
               </Text>
             </View>
-
             <Switch
               value={autoplayEnabled}
               onValueChange={setAutoplayEnabled}
@@ -387,9 +516,7 @@ const handleLogout = () => {
               }
             />
           </View>
-
           <View style={styles.separator} />
-
           <Pressable
             style={styles.settingRow}
             onPress={handleVideoQuality}
@@ -397,39 +524,31 @@ const handleLogout = () => {
             <View style={styles.settingIcon}>
               <Text>📺</Text>
             </View>
-
             <View style={styles.settingContent}>
               <Text style={styles.settingTitle}>
                 Qualité vidéo
               </Text>
-
               <Text style={styles.settingDescription}>
                 Automatique
               </Text>
             </View>
-
             <Text style={styles.arrow}>
               ›
             </Text>
           </Pressable>
-
           <View style={styles.separator} />
-
           <View style={styles.settingRow}>
             <View style={styles.settingIcon}>
               <Text>📶</Text>
             </View>
-
             <View style={styles.settingContent}>
               <Text style={styles.settingTitle}>
                 Données mobiles
               </Text>
-
               <Text style={styles.settingDescription}>
                 Autoriser le streaming sur réseau mobile
               </Text>
             </View>
-
             <Switch
               value={mobileDataEnabled}
               onValueChange={setMobileDataEnabled}
@@ -445,11 +564,9 @@ const handleLogout = () => {
             />
           </View>
         </View>
-
         <Text style={styles.category}>
           STOCKAGE
         </Text>
-
         <View style={styles.card}>
           <Pressable
             style={styles.settingRow}
@@ -458,27 +575,22 @@ const handleLogout = () => {
             <View style={styles.settingIcon}>
               <Text>🗑️</Text>
             </View>
-
             <View style={styles.settingContent}>
               <Text style={styles.settingTitle}>
                 Vider le cache
               </Text>
-
               <Text style={styles.settingDescription}>
                 Supprimer les paramètres enregistrés
               </Text>
             </View>
-
             <Text style={styles.arrow}>
               ›
             </Text>
           </Pressable>
         </View>
-
         <Text style={styles.category}>
           COMPTE
         </Text>
-
         <View style={styles.card}>
           <Pressable
             style={styles.settingRow}
@@ -489,24 +601,19 @@ const handleLogout = () => {
             <View style={styles.settingIcon}>
               <Text>🔐</Text>
             </View>
-
             <View style={styles.settingContent}>
               <Text style={styles.settingTitle}>
                 Sécurité
               </Text>
-
               <Text style={styles.settingDescription}>
                 Mot de passe et sécurité du compte
               </Text>
             </View>
-
             <Text style={styles.arrow}>
               ›
             </Text>
           </Pressable>
-
           <View style={styles.separator} />
-
           <Pressable
             style={styles.settingRow}
             onPress={handleLogout}
@@ -514,51 +621,41 @@ const handleLogout = () => {
             <View style={styles.settingIcon}>
               <Text>🚪</Text>
             </View>
-
             <View style={styles.settingContent}>
               <Text style={styles.logoutTitle}>
                 Se déconnecter
               </Text>
-
               <Text style={styles.settingDescription}>
                 Quitter ton compte ScorpionTV
               </Text>
             </View>
-
             <Text style={styles.arrow}>
               ›
             </Text>
-          </Pressable>
-
-          
+          </Pressable>      
           <Pressable
             style={styles.settingRow}
-            onPress={handleLogout}
+            onPress={handleFactoryReset}
           >
             <View style={styles.settingIcon}>
               <Text>♾️</Text>
             </View>
-
             <View style={styles.settingContent}>
               <Text style={styles.logoutTitle}>
                 Restorer les valeurs d'usine
               </Text>
-
               <Text style={styles.settingDescription}>
                 cela supprime toutes vos données ScorpionTV
               </Text>
             </View>
-
             <Text style={styles.arrow}>
               ›
             </Text>
           </Pressable>
         </View>
-
         <Text style={styles.category}>
           À PROPOS
         </Text>
-
         <View style={styles.card}>
           <Pressable
             style={styles.settingRow}
@@ -567,28 +664,22 @@ const handleLogout = () => {
             <View style={styles.settingIcon}>
               <Text>ℹ️</Text>
             </View>
-
             <View style={styles.settingContent}>
               <Text style={styles.settingTitle}>
                 À propos de ScorpionTV
               </Text>
-
               <Text style={styles.settingDescription}>
                 Informations sur l'application
               </Text>
             </View>
-
             <Text style={styles.arrow}>
               ›
             </Text>
           </Pressable>
         </View>
-
         <Text style={styles.version}>
           {APP_NAME} • v{APP_VERSION} © {APP_YEAR}  PlumaSoft inc
-        </Text>
-
-       
+        </Text>       
       </ScrollView>
     </SafeAreaView>
   );
@@ -664,44 +755,37 @@ const styles = StyleSheet.create({
     marginLeft: 12,
     marginRight: 10,
   },
-
   settingTitle: {
     color: '#FFFFFF',
     fontSize: 15,
     fontWeight: '700',
   },
-
   logoutTitle: {
     color: '#E50914',
     fontSize: 15,
     fontWeight: '700',
   },
-
   settingDescription: {
     color: '#777777',
     fontSize: 12,
     marginTop: 4,
     lineHeight: 17,
   },
-
   separator: {
     height: 1,
     backgroundColor: 'rgba(255,255,255,0.07)',
   },
-
   arrow: {
     color: '#777777',
     fontSize: 28,
     marginLeft: 5,
   },
-
   version: {
     color: '#555555',
     fontSize: 12,
     textAlign: 'center',
     marginTop: 5,
   },
-
   copyright: {
     color: '#444444',
     fontSize: 11,
